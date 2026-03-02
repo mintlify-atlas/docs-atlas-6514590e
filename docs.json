@@ -93,6 +93,8 @@
               "api/system/state",
               "api/system/calibrate",
               "api/system/inject-fault",
+              "api/system/reset",
+              "api/system/stop",
               "api/system/purge"
             ]
           },

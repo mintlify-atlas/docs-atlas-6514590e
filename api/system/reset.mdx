@@ -1,0 +1,118 @@
+---
+title: Reset to healthy monitoring
+description: POST /system/reset - Stop fault injection and return to healthy monitoring
+---
+
+## POST /system/reset
+
+Stop fault injection and return to healthy monitoring with true recovery. This allows the system to naturally recover from faults while continuing to track the Degradation Index.
+
+### Query Parameters
+
+<ParamField query="asset_id" type="string" default="Motor-01">
+  Asset identifier to reset
+</ParamField>
+
+### Response
+
+<ResponseField name="status" type="string">
+  Action status: `reset`
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Human-readable status message
+</ResponseField>
+
+<ResponseField name="state" type="string">
+  New system state: `MONITORING_HEALTHY`
+</ResponseField>
+
+### Example
+
+```bash cURL
+curl -X POST "https://predictive-maintenance-uhlb.onrender.com/system/reset?asset_id=Motor-01"
+```
+
+```json Response
+{
+  "status": "reset",
+  "message": "System reset to healthy monitoring.",
+  "state": "MONITORING_HEALTHY"
+}
+```
+
+### Behavior
+
+When you call `/system/reset`:
+
+1. **Stops fault injection** - Background thread terminates
+2. **Transitions to MONITORING_HEALTHY** - System returns to normal operation
+3. **Resumes healthy data generation** - 100Hz sensor readings with healthy baseline patterns
+4. **Continues DI tracking** - The Degradation Index is NOT reset (use `/system/purge` for that)
+5. **Natural recovery** - Health score may improve if the system operates within healthy parameters
+
+<Note>
+  **Key Difference from Purge**: `/reset` stops the fault but preserves the Degradation Index history. Use this to simulate a maintenance action that returns the asset to normal operation without a full system reset.
+</Note>
+
+### State Requirements
+
+| Current State | Can Reset? |
+|--------------|-----------|
+| `IDLE` | ❌ No |
+| `CALIBRATING` | ❌ No |
+| `MONITORING_HEALTHY` | ✅ Yes (no-op) |
+| `FAULT_INJECTION` | ✅ Yes |
+
+<Warning>
+  You can only reset when in `MONITORING_HEALTHY` or `FAULT_INJECTION` state. Attempting to reset from other states will return a 400 error.
+</Warning>
+
+### Status Codes
+
+- `200` - Reset successful
+- `400` - Invalid state transition
+
+### Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Simulated Maintenance" icon="wrench">
+    Reset after fault injection to simulate maintenance intervention
+  </Card>
+  <Card title="Recovery Testing" icon="chart-line">
+    Test how quickly the system recovers from faults
+  </Card>
+  <Card title="DI Persistence" icon="database">
+    Verify that DI continues to track cumulative damage
+  </Card>
+  <Card title="Manual Intervention" icon="hand">
+    Stop faults manually via dashboard or API
+  </Card>
+</CardGroup>
+
+### Comparison with Other Endpoints
+
+| Endpoint | Stops Fault? | Resets DI? | Returns to State |
+|----------|-------------|-----------|------------------|
+| `/system/reset` | ✅ Yes | ❌ No | `MONITORING_HEALTHY` |
+| `/system/stop` | ✅ Yes | ❌ No | `IDLE` |
+| `/system/purge` | ✅ Yes | ✅ Yes | `IDLE` |
+
+Use `/reset` when you want to return to normal operation while preserving cumulative health history.
+
+### Related Endpoints
+
+<CardGroup cols={2}>
+  <Card title="Inject Fault" icon="syringe" href="/api/system/inject-fault">
+    Start fault injection
+  </Card>
+  <Card title="Stop Session" icon="stop" href="/api/system/stop">
+    Return to IDLE state
+  </Card>
+  <Card title="Purge System" icon="trash" href="/api/system/purge">
+    Full system reset with DI=0
+  </Card>
+  <Card title="System State" icon="circle-info" href="/api/system/state">
+    Check current state
+  </Card>
+</CardGroup>
