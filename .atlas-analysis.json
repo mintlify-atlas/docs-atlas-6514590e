@@ -1,0 +1,168 @@
+{
+  "projectType": "saas",
+  "projectName": "Predictive Maintenance System",
+  "projectDescription": "Industrial asset health monitoring with ML-powered anomaly detection and real-time prognostics.",
+  "theme": "aspen",
+  "primaryColor": "#46E3B7",
+  "lightColor": "#5EEAD4",
+  "darkColor": "#14B8A6",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker",
+              "deployment/local-development",
+              "deployment/production"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/sensor-ingestion",
+              "features/anomaly-detection",
+              "features/health-assessment",
+              "features/fault-simulation",
+              "features/reporting"
+            ]
+          },
+          {
+            "group": "Machine Learning",
+            "pages": [
+              "ml/overview",
+              "ml/dual-model-architecture",
+              "ml/feature-engineering",
+              "ml/baseline-training",
+              "ml/degradation-index"
+            ]
+          },
+          {
+            "group": "Dashboard",
+            "pages": [
+              "dashboard/overview",
+              "dashboard/metrics",
+              "dashboard/controls",
+              "dashboard/operator-logs"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "api/authentication",
+              "api/errors"
+            ]
+          },
+          {
+            "group": "Ingestion",
+            "pages": [
+              "api/ingest",
+              "api/health"
+            ]
+          },
+          {
+            "group": "System Control",
+            "pages": [
+              "api/system/state",
+              "api/system/calibrate",
+              "api/system/inject-fault",
+              "api/system/purge"
+            ]
+          },
+          {
+            "group": "Integration",
+            "pages": [
+              "api/integration/health-status",
+              "api/integration/sensor-history",
+              "api/integration/events"
+            ]
+          },
+          {
+            "group": "Operator",
+            "pages": [
+              "api/operator/logs",
+              "api/operator/create-log"
+            ]
+          },
+          {
+            "group": "Reporting",
+            "pages": [
+              "api/reports/executive-pdf",
+              "api/reports/analyst-excel",
+              "api/reports/industrial-pdf"
+            ]
+          },
+          {
+            "group": "Sandbox",
+            "pages": [
+              "api/sandbox/what-if"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Guides",
+        "groups": [
+          {
+            "group": "Integration",
+            "pages": [
+              "guides/data-generator",
+              "guides/influxdb-setup",
+              "guides/calibration-workflow"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "guides/model-retraining",
+              "guides/monitoring",
+              "guides/troubleshooting"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Real-time sensor monitoring with 100Hz data ingestion",
+    "Dual Isolation Forest anomaly detection (99.6% F1 score)",
+    "Cumulative Degradation Index with monotonic health tracking",
+    "ML-powered explainability with human-readable insights",
+    "Role-specialized reporting (Executive PDF, Analyst Excel, Industrial Certificate)",
+    "React dashboard with real-time visualization and fault injection controls",
+    "InfluxDB Cloud time-series persistence with restart-safe state hydration",
+    "Docker and systemd deployment options"
+  ],
+  "publicApiSurface": [
+    "POST /ingest - Ingest sensor data with validation",
+    "GET /health - System health check",
+    "GET /ping - Keep-alive heartbeat",
+    "POST /system/calibrate - Start baseline calibration",
+    "POST /system/inject-fault - Inject fault with severity control",
+    "POST /system/purge - Deep system reset",
+    "GET /system/state - Get current system state",
+    "GET /integration/health-status - Get asset health assessment",
+    "GET /integration/sensor-history - Query time-series data",
+    "POST /operator/logs - Create maintenance event log",
+    "GET /operator/logs - Retrieve operator logs",
+    "GET /reports/executive-pdf - Generate executive summary",
+    "GET /reports/analyst-excel - Generate multi-sheet workbook",
+    "GET /reports/industrial-pdf - Generate 5-page technical report",
+    "POST /sandbox/what-if - Simulate fault scenarios"
+  ]
+}
