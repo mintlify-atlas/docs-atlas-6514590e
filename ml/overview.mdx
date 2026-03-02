@@ -1,0 +1,185 @@
+---
+title: ML Overview
+description: High-level overview of the machine learning approach for predictive maintenance
+---
+
+# Machine Learning Overview
+
+The Predictive Maintenance System uses **Isolation Forest** anomaly detection to identify deviations from healthy baseline behavior. The ML pipeline is designed for explainability, determinism, and operational safety.
+
+## Core Approach
+
+### Unsupervised Anomaly Detection
+
+The system uses **Isolation Forest**, an ensemble method that identifies anomalies by measuring how easily data points can be isolated in a random decision tree.
+
+<Info>
+**Why Isolation Forest?**
+- Works with unlabeled data (no need for fault examples during training)
+- Fast inference (critical for real-time monitoring)
+- Explainable (feature importance available)
+- Handles multi-dimensional feature spaces well
+</Info>
+
+### Training Philosophy: Healthy Data Only
+
+All models are trained **exclusively on healthy baseline data**:
+
+```python
+# From baseline.py:188
+def _filter_healthy_data(self, data):
+    """
+    Filter to healthy data only (is_fault_injected == False).
+    
+    If is_fault_injected column doesn't exist, assumes all data is healthy.
+    """
+    if 'is_fault_injected' in data.columns:
+        return data[data['is_fault_injected'] == False].copy()
+    return data.copy()
+```
+
+**Why this matters:**
+- The model learns "what normal looks like"
+- Any significant deviation from this learned normal behavior is flagged as an anomaly
+- No need to anticipate all possible failure modes upfront
+
+<Warning>
+Training on faulty data would teach the model to accept failures as normal, defeating the purpose of anomaly detection.
+</Warning>
+
+## Model Architecture
+
+The system runs **two Isolation Forest models** in parallel (see [Dual-Model Architecture](/ml/dual-model-architecture)):
+
+| Model | Features | Input Frequency | Use Case |
+|-------|----------|----------------|----------|
+| **Legacy (v2)** | 6 engineered features | 1Hz (downsampled) | General anomaly detection |
+| **Batch (v3)** | 16 statistical features | 100Hz windows | High-frequency fault detection |
+
+Both models are trained during system calibration via `POST /system/calibrate`.
+
+## Score Semantics
+
+All anomaly scores follow a consistent semantic:
+
+```python
+# From detector.py:77
+class AnomalyScore(BaseModel):
+    """Result of anomaly scoring."""
+    score: float = Field(..., ge=0.0, le=1.0, description="0.0=Normal, 1.0=Anomalous")
+```
+
+- **0.0** = Perfectly Normal (matches healthy baseline)
+- **1.0** = Highly Anomalous (extreme deviation from baseline)
+
+### Score Calibration
+
+Raw Isolation Forest decision scores are calibrated using quantile-based thresholds:
+
+```python
+# From detector.py:240-245
+# Phase 2: Compute quantile threshold for calibration
+# Get decision scores for training data
+training_decisions = self._model.decision_function(features_scaled)
+
+# Decision function: higher = more normal
+# We want the 99th percentile of healthy data as our threshold
+self._threshold_score = float(np.percentile(-training_decisions, 99))
+```
+
+Calibrated scores ensure that:
+- Healthy data (within the 99th percentile) maps to scores < 0.67
+- True anomalies map to scores > 0.67
+
+## Deterministic Behavior
+
+All models are trained with fixed random seeds for reproducibility:
+
+```python
+# From detector.py:69
+DEFAULT_RANDOM_STATE = 42  # Deterministic training
+
+# From detector.py:230-236
+self._model = IsolationForest(
+    contamination=self.contamination,
+    n_estimators=self.n_estimators,
+    random_state=self.random_state,  # Ensures reproducibility
+    n_jobs=-1  # Use all cores
+)
+```
+
+**Same training data = Same model = Same predictions**
+
+## Hyperparameters
+
+### Legacy Model (detector.py)
+
+```python
+DEFAULT_CONTAMINATION = 0.05  # Expect 5% outliers in healthy data
+DEFAULT_N_ESTIMATORS = 100    # Number of trees in the forest
+DEFAULT_RANDOM_STATE = 42     # Reproducibility seed
+```
+
+### Batch Model (batch_detector.py)
+
+```python
+DEFAULT_CONTAMINATION = 0.05
+DEFAULT_N_ESTIMATORS = 150     # More trees for 16-D feature space
+DEFAULT_RANDOM_STATE = 42
+```
+
+<Accordion title="Why contamination=0.05?">
+The `contamination` parameter tells Isolation Forest what percentage of the training data might be outliers. 
+
+Even "healthy" data has natural variation. Setting this to 0.05 (5%) means:
+- The top 5% most isolated points in training data are considered potential outliers
+- This prevents overfitting to noise
+- The model learns the core "normal" distribution while allowing for natural variance
+
+Increased from 0.001 in Phase 2 for better calibration on real-world data.
+</Accordion>
+
+## One Model Per Asset
+
+Each asset (Motor-01, Pump-02, etc.) gets its own trained model:
+
+```python
+# From detector.py:98-105
+def __init__(
+    self,
+    asset_id: str,  # Each detector belongs to ONE asset
+    contamination: float = DEFAULT_CONTAMINATION,
+    n_estimators: int = DEFAULT_N_ESTIMATORS,
+    random_state: int = DEFAULT_RANDOM_STATE
+):
+```
+
+**Why?** 
+- Each asset has unique healthy operating characteristics
+- A "normal" vibration for a motor might be anomalous for a pump
+- Asset-specific models improve detection accuracy
+
+## No Auto-Retraining
+
+Models are trained once during calibration and remain static:
+
+```python
+# From detector.py:11
+# Constraints:
+# - Train only on healthy baseline data
+# - One model per asset (no global models)
+# - No auto-retraining  ← Explicit design choice
+# - Deterministic (random_state=42)
+```
+
+**Rationale:**
+- Prevents "drift" where the model adapts to accept degradation as normal
+- Ensures audit trail (same baseline = same results)
+- Re-calibration is explicit via `POST /system/calibrate`
+
+<Card title="Next Steps" icon="arrow-right">
+- [Dual-Model Architecture](/ml/dual-model-architecture) — Legacy vs Batch models
+- [Feature Engineering](/ml/feature-engineering) — 6 legacy + 16 batch features
+- [Baseline Training](/ml/baseline-training) — Calibration workflow
+- [Degradation Index](/ml/degradation-index) — From scores to health metrics
+</Card>

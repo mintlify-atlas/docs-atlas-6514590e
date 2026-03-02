@@ -1,0 +1,117 @@
+---
+title: Health check
+description: GET /health and GET /ping endpoints for system health monitoring
+---
+
+## GET /health
+
+Comprehensive health check endpoint that verifies API and InfluxDB connectivity.
+
+### Response
+
+<ResponseField name="status" type="string">
+  System health status: `healthy`, `degraded`, or `unhealthy`
+</ResponseField>
+
+<ResponseField name="database" type="string">
+  Database status: `connected`, `mock`, or `unavailable`
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Human-readable status description
+</ResponseField>
+
+### Example
+
+```bash cURL
+curl https://predictive-maintenance-uhlb.onrender.com/health
+```
+
+```json Response (Healthy)
+{
+  "status": "healthy",
+  "database": "connected",
+  "message": "All systems operational. InfluxDB connected."
+}
+```
+
+```json Response (Mock Mode)
+{
+  "status": "healthy",
+  "database": "mock",
+  "message": "Running in mock mode. Data persisted to console. Set INFLUX_TOKEN for full persistence."
+}
+```
+
+```json Response (Degraded)
+{
+  "status": "degraded",
+  "database": "unavailable",
+  "message": "Running in degraded mode. Demo features available via /system/* endpoints."
+}
+```
+
+### Status Codes
+
+- `200` - Health check succeeded (even in mock/degraded mode)
+- `503` - Critical failure (rare, only if API itself is unresponsive)
+
+<Info>
+  The `/health` endpoint returns 200 even in mock mode. This is intentional - the system uses graceful degradation to allow demo/testing without a live InfluxDB instance.
+</Info>
+
+---
+
+## GET /ping
+
+Lightweight heartbeat endpoint with no database or ML dependencies. Used by the frontend's keep-alive mechanism to prevent Render free-tier cold starts.
+
+### Response
+
+<ResponseField name="status" type="string">
+  Always returns `ok`
+</ResponseField>
+
+### Example
+
+```bash cURL
+curl https://predictive-maintenance-uhlb.onrender.com/ping
+```
+
+```json Response
+{
+  "status": "ok"
+}
+```
+
+### Status Codes
+
+- `200` - Pong received
+
+### Keep-Alive Strategy
+
+The frontend dashboard sends a `/ping` request every 10 minutes to keep the Render backend warm:
+
+```javascript
+// Frontend keep-alive implementation
+setInterval(() => {
+  fetch(`${API_URL}/ping`).catch(() => {});
+}, 10 * 60 * 1000); // 10 minutes
+```
+
+This prevents the free-tier backend from spinning down after 15 minutes of inactivity.
+
+<Tip>
+  Use `/ping` for uptime monitoring and load balancer health checks. It has minimal overhead ({"<"}1ms) and doesn't touch the database.
+</Tip>
+
+---
+
+## Comparison
+
+| Endpoint | Database Check | ML Check | Use Case | Latency |
+|----------|---------------|----------|----------|---------|
+| `/health` | ✅ Yes | ❌ No | Deployment verification, admin dashboards | ~50-200ms |
+| `/ping` | ❌ No | ❌ No | Keep-alive, uptime monitoring | {"<"}1ms |
+
+Use `/health` for comprehensive status checks before deployments. Use `/ping` for lightweight heartbeats.

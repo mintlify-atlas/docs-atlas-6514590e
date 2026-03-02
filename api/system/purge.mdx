@@ -1,0 +1,265 @@
+---
+title: "POST /system/purge"
+description: "Deep system reset - clear all data and reset DI to 0"
+---
+
+## Overview
+
+Performs a **complete system purge** by wiping all InfluxDB data, clearing in-memory state, and resetting the Degradation Index (DI) to 0.0. This is the **nuclear option** for starting fresh with a clean baseline.
+
+<Warning>
+  **This operation is IRREVERSIBLE.** All historical sensor data, baseline profiles, trained models, and cumulative degradation state will be permanently deleted.
+</Warning>
+
+## Endpoint
+
+```
+POST /system/purge
+```
+
+## Purge Actions
+
+The purge performs these operations in sequence:
+
+### 1. Stop Background Tasks
+
+Halts any running calibration, monitoring, or fault injection threads.
+
+### 2. Delete InfluxDB Data
+
+Attempts to delete all records in the `sensor_data` bucket.
+
+<Note>
+  **InfluxDB Serverless v3 Limitation:** Range deletes are not supported on serverless instances. The system writes a DI=0.0 reset point to overwrite stale data during hydration.
+</Note>
+
+### 3. Write DI Reset Point
+
+Writes a single point with `degradation_index=0.0` to ensure clean hydration on next startup:
+
+```python
+db.write_point(
+    measurement="sensor_events",
+    tags={"asset_id": "Motor-01", "asset_type": "motor", "source": "purge_reset"},
+    fields={"degradation_index": 0.0},
+    timestamp=datetime.now(timezone.utc)
+)
+```
+
+### 4. Clear In-Memory State
+
+Wipes the following dictionaries:
+
+- `_sensor_history` - Last 1000 sensor readings
+- `_baselines` - Baseline profiles per asset
+- `_detectors` - Legacy 1Hz Isolation Forest models
+- `_batch_detectors` - Batch 100Hz Isolation Forest models
+- `_degradation_state` - Cumulative DI tracking
+
+### 5. Initialize Clean DI State
+
+Pre-populates DI=0.0 for Motor-01 to prevent stale InfluxDB queries:
+
+```python
+_degradation_state["Motor-01"] = {
+    "degradation_index": 0.0,
+    "total_cycles": 0,
+    "last_damage_rate": 0.0,
+    "hydrated": True
+}
+```
+
+### 6. Reset System State
+
+Returns to `IDLE` state with validation metrics zeroed.
+
+## Response
+
+<ResponseField name="status" type="string" required>
+  Always returns `"purged"` when operation completes successfully
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Human-readable confirmation of purge actions
+</ResponseField>
+
+<ResponseField name="state" type="string" required>
+  New system state: `"IDLE"`
+</ResponseField>
+
+## Example Request
+
+```bash cURL
+curl -X POST "https://predictive-maintenance-uhlb.onrender.com/system/purge"
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    "https://predictive-maintenance-uhlb.onrender.com/system/purge"
+)
+
+data = response.json()
+print(f"Status: {data['status']}")
+print(f"Message: {data['message']}")
+```
+
+```javascript JavaScript
+const response = await fetch(
+  'https://predictive-maintenance-uhlb.onrender.com/system/purge',
+  { method: 'POST' }
+);
+
+const data = await response.json();
+console.log(`Status: ${data.status}`);
+console.log(`Message: ${data.message}`);
+```
+
+## Example Response
+
+```json 200 OK
+{
+  "status": "purged",
+  "message": "All data purged. InfluxDB bucket cleared, ML baselines wiped. System is IDLE.",
+  "state": "IDLE"
+}
+```
+
+## Post-Purge State
+
+After purge completes, the system returns to a clean slate:
+
+| Component | State |
+|-----------|-------|
+| System State | `IDLE` |
+| Degradation Index | `0.0` |
+| Total Cycles | `0` |
+| Training Samples | `0` |
+| Healthy Stability | `100.0%` |
+| Fault Capture Rate | `100.0%` |
+| Baseline Profiles | None (cleared) |
+| ML Models | None (cleared) |
+| Sensor History | Empty |
+| InfluxDB Data | Wiped (or DI=0.0 reset point only) |
+
+## Next Steps
+
+After purge, you must recalibrate before monitoring:
+
+```bash
+# 1. Purge system
+curl -X POST "https://predictive-maintenance-uhlb.onrender.com/system/purge"
+
+# 2. Verify IDLE state
+curl "https://predictive-maintenance-uhlb.onrender.com/system/state"
+
+# 3. Recalibrate
+curl -X POST "https://predictive-maintenance-uhlb.onrender.com/system/calibrate"
+
+# 4. Wait for MONITORING_HEALTHY state
+curl "https://predictive-maintenance-uhlb.onrender.com/system/state"
+
+# 5. Begin fault injection or normal monitoring
+curl -X POST "https://predictive-maintenance-uhlb.onrender.com/system/inject-fault?fault_type=JITTER&severity=SEVERE"
+```
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Reset Demo" icon="rotate">
+    Return to clean state for fresh demo runs without restarting server
+  </Card>
+  
+  <Card title="Clear Cumulative Damage" icon="heart-pulse">
+    Reset DI=0.0 after long fault injection sessions that pushed DI → 1.0
+  </Card>
+  
+  <Card title="Baseline Corruption" icon="triangle-exclamation">
+    Wipe corrupted baseline and retrain from scratch
+  </Card>
+  
+  <Card title="Test Automation" icon="robot">
+    Reset state between automated test runs for reproducibility
+  </Card>
+</CardGroup>
+
+## State Persistence vs. Purge
+
+### What Survives Restart?
+
+| Data | Server Restart | Purge |
+|------|:--------------:|:-----:|
+| InfluxDB Sensor Data | ✅ Persists | ❌ Deleted |
+| Degradation Index (InfluxDB) | ✅ Persists | ❌ Reset to 0.0 |
+| Baseline Profiles | ❌ Lost | ❌ Deleted |
+| ML Models | ❌ Lost | ❌ Deleted |
+| Sensor History (RAM) | ❌ Lost | ❌ Deleted |
+| Degradation State (RAM) | ❌ Lost (hydrated from DB) | ❌ Deleted |
+
+<Note>
+  **Restart behavior:** DI is **hydrated** from InfluxDB on first `GET /system/state` call, so cumulative damage survives restarts (unless purged first).
+</Note>
+
+## DI Hydration After Purge
+
+On next API call requiring degradation state:
+
+```python
+def _ensure_degradation_state(asset_id: str):
+    # Query InfluxDB for last DI
+    last_di = db.query_latest_degradation_index(asset_id)  # Returns 0.0 after purge
+    
+    state = {
+        "degradation_index": last_di,
+        "total_cycles": 0,
+        "last_damage_rate": 0.0,
+        "hydrated": True
+    }
+    _degradation_state[asset_id] = state
+    print(f"[DEGRADATION] Hydrated {asset_id}: DI={last_di:.6f}")
+```
+
+**Expected log after purge:**
+```
+[DEGRADATION] Hydrated Motor-01: DI=0.000000
+```
+
+## Error Responses
+
+This endpoint does not return errors under normal operation. It always attempts to purge and returns success.
+
+<Note>
+  If InfluxDB range delete fails (common on serverless v3), the system gracefully falls back to DI=0.0 reset point strategy.
+</Note>
+
+## Performance Characteristics
+
+- **Latency:** 200-500ms (depends on InfluxDB delete performance)
+- **InfluxDB Deletes:** Attempts full bucket wipe (may fail on serverless v3)
+- **InfluxDB Writes:** 1 point (DI=0.0 reset)
+- **Memory Released:** ~50MB (baselines + models)
+- **Downtime:** None (purge is synchronous, {"<"}1s)
+
+## Safety Considerations
+
+<Warning>
+  **Production Environments:** Do NOT expose this endpoint to end users. Consider:
+  - Restricting to admin-only via API key authentication
+  - Adding confirmation dialog in UI (e.g., "Type 'PURGE' to confirm")
+  - Logging purge events for audit trails
+</Warning>
+
+## Comparison with Other Reset Endpoints
+
+| Endpoint | State Transition | DI Reset | Data Deleted | Models Cleared |
+|----------|------------------|----------|--------------|----------------|
+| `POST /system/stop` | → IDLE | ❌ No | ❌ No | ❌ No |
+| `POST /system/reset` | → MONITORING_HEALTHY | ❌ No | ❌ No | ❌ No |
+| `POST /system/purge` | → IDLE | ✅ Yes | ✅ Yes | ✅ Yes |
+
+## Related Endpoints
+
+- [GET /system/state](/api/system/state) - Verify post-purge state
+- [POST /system/calibrate](/api/system/calibrate) - Recalibrate after purge
+- [POST /system/stop](/api/system/stop) - Soft reset without data deletion

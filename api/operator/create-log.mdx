@@ -1,0 +1,148 @@
+---
+title: "POST /api/log"
+description: "Record a maintenance event for ML ground-truth labeling"
+---
+
+## Endpoint
+
+```
+POST /api/log
+```
+
+Create a maintenance log entry to record operator activities. Events are stored in InfluxDB and serve as ground-truth labels for supervised machine learning.
+
+## Request Body
+
+<ParamField body="asset_id" type="string" required>
+  Asset identifier (e.g., "Motor-01"). Must be 1-100 characters.
+</ParamField>
+
+<ParamField body="event_type" type="string" required>
+  Maintenance event classification. Allowed values:
+  
+  **Preventive Maintenance:**
+  - `PREVENTIVE_LUBRICATION` - Scheduled lubrication activities
+  - `PREVENTIVE_CLEANING` - Scheduled cleaning activities
+  - `PREVENTIVE_INSPECTION` - Scheduled inspection activities
+  
+  **Corrective Maintenance:**
+  - `CORRECTIVE_BEARING_REPLACEMENT` - Repair/replacement of bearings
+  - `CORRECTIVE_ALIGNMENT` - Alignment corrections
+  - `CORRECTIVE_ELECTRICAL` - Electrical repairs
+  
+  **Status Changes:**
+  - `STATUS_CALIBRATION` - System calibration events
+  - `STATUS_RESTART` - System restart events
+</ParamField>
+
+<ParamField body="severity" type="string" required>
+  Event severity level. Allowed values:
+  - `LOW` - Minor maintenance or routine activities
+  - `MEDIUM` - Standard maintenance requiring attention
+  - `HIGH` - Urgent repairs or significant issues
+  - `CRITICAL` - Emergency situations requiring immediate action
+</ParamField>
+
+<ParamField body="description" type="string" required>
+  Human-readable description of the maintenance activity. Must be 1-1000 characters. Include relevant details such as part numbers, observations, and actions taken.
+</ParamField>
+
+<ParamField body="timestamp" type="datetime" optional>
+  Event timestamp in ISO 8601 format with UTC timezone (e.g., "2026-01-31T10:30:00Z"). If not provided, defaults to the current server time. Allows backdating for historical entries.
+</ParamField>
+
+## Response
+
+<ResponseField name="event_id" type="string">
+  Unique identifier (UUID v4) for this log entry
+</ResponseField>
+
+<ResponseField name="asset_id" type="string">
+  Asset that was logged
+</ResponseField>
+
+<ResponseField name="event_type" type="string">
+  Type of maintenance event that was recorded
+</ResponseField>
+
+<ResponseField name="severity" type="string">
+  Severity level of the event
+</ResponseField>
+
+<ResponseField name="timestamp" type="datetime">
+  Timestamp of the event (UTC)
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Confirmation message indicating successful log creation
+</ResponseField>
+
+## Use Cases
+
+- **Ground-Truth Labeling**: Record maintenance events that can be correlated with sensor data for supervised ML training
+- **Bearing Replacement Tracking**: Log bearing replacements to correlate with vibration anomalies detected in sensor data
+- **Lubrication Monitoring**: Record lubrication events to track maintenance effectiveness over time
+- **Failure Analysis**: Document electrical repairs and other corrective actions for failure pattern analysis
+
+## ML Integration
+
+Maintenance logs stored via this endpoint can be queried alongside sensor data to:
+- Train supervised models that predict failure modes based on sensor patterns
+- Identify early warning indicators in sensor data before failures occur
+- Validate anomaly detection algorithms against real-world maintenance events
+- Build predictive maintenance models with labeled training data
+
+## Example Request
+
+```bash
+curl -X POST "http://localhost:8000/api/log" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "asset_id": "Motor-01",
+    "event_type": "CORRECTIVE_BEARING_REPLACEMENT",
+    "severity": "HIGH",
+    "description": "Replaced main bearing due to excessive vibration. Part #SKF-6205-2RS.",
+    "timestamp": "2026-01-31T10:30:00Z"
+  }'
+```
+
+## Example Response
+
+```json
+{
+  "event_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+  "asset_id": "Motor-01",
+  "event_type": "CORRECTIVE_BEARING_REPLACEMENT",
+  "severity": "HIGH",
+  "timestamp": "2026-01-31T10:30:00Z",
+  "message": "Log entry created successfully for Motor-01"
+}
+```
+
+## Error Responses
+
+### 422 Validation Error
+
+Returned when the request body fails validation.
+
+```json
+{
+  "detail": [
+    {
+      "loc": ["body", "event_type"],
+      "msg": "Input should be 'PREVENTIVE_LUBRICATION', 'PREVENTIVE_CLEANING', 'PREVENTIVE_INSPECTION', 'CORRECTIVE_BEARING_REPLACEMENT', 'CORRECTIVE_ALIGNMENT', 'CORRECTIVE_ELECTRICAL', 'STATUS_CALIBRATION' or 'STATUS_RESTART'",
+      "type": "enum"
+    }
+  ]
+}
+```
+
+### 500 Internal Server Error
+
+Returned when the database write fails or an unexpected error occurs.
+
+```json
+{
+  "detail": "Failed to persist log entry to database"
+}
+```

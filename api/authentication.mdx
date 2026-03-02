@@ -1,0 +1,107 @@
+---
+title: 'Authentication'
+description: 'Connect to the Predictive Maintenance API'
+---
+
+## Open API
+
+The Predictive Maintenance API is currently an **open API** with no authentication required. This allows for quick integration and testing during development.
+
+<Warning>
+  This API does not require authentication tokens. In production environments, you should implement proper authentication and authorization mechanisms.
+</Warning>
+
+## Base URL
+
+The live API is available at:
+
+```
+https://predictive-maintenance-uhlb.onrender.com
+```
+
+### Example Request
+
+```bash
+curl https://predictive-maintenance-uhlb.onrender.com/health
+```
+
+```json
+{
+  "status": "healthy",
+  "database": "connected",
+  "message": "All systems operational. InfluxDB connected."
+}
+```
+
+## CORS Configuration
+
+The API is configured to accept requests from the following origins:
+
+- `http://localhost:3000`
+- `http://localhost:5173`
+- `http://localhost:8080`
+- `http://127.0.0.1:3000`
+- `http://127.0.0.1:5173`
+- `http://127.0.0.1:8080`
+- All Vercel preview deployments (`https://*.vercel.app`)
+
+### Allowed Methods
+
+```
+GET, POST, PUT, DELETE, OPTIONS
+```
+
+### Allowed Headers
+
+```
+Content-Type, Authorization
+```
+
+<Note>
+  Credentials are enabled (`allow_credentials: true`), allowing cookies and authentication headers to be sent with requests.
+</Note>
+
+## Client Setup
+
+Set up your API client with the base URL:
+
+<CodeGroup>
+
+```javascript JavaScript
+const API_BASE_URL = 'https://predictive-maintenance-uhlb.onrender.com';
+
+const response = await fetch(`${API_BASE_URL}/ingest`, {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify(sensorData),
+});
+```
+
+```python Python
+import requests
+
+API_BASE_URL = 'https://predictive-maintenance-uhlb.onrender.com'
+
+response = requests.post(
+    f'{API_BASE_URL}/ingest',
+    json=sensor_data,
+    headers={'Content-Type': 'application/json'}
+)
+```
+
+```bash cURL
+curl -X POST https://predictive-maintenance-uhlb.onrender.com/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"event_id": "evt_001", ...}'
+```
+
+</CodeGroup>
+
+## Interactive Documentation
+
+Explore the API interactively using the built-in documentation:
+
+- **Swagger UI**: [https://predictive-maintenance-uhlb.onrender.com/docs](https://predictive-maintenance-uhlb.onrender.com/docs)
+- **ReDoc**: [https://predictive-maintenance-uhlb.onrender.com/redoc](https://predictive-maintenance-uhlb.onrender.com/redoc)

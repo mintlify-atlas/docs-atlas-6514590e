@@ -1,0 +1,372 @@
+---
+title: Docker Deployment
+description: Deploy the Predictive Maintenance System using Docker and Docker Compose
+---
+
+Deploy the entire Predictive Maintenance System stack (backend + frontend) using Docker containers for consistent, portable deployment across environments.
+
+## Prerequisites
+
+<Warning>
+Never commit `node_modules/` to Git. Windows binaries cause permission errors on Linux servers (Vercel Error 126).
+</Warning>
+
+Ensure you have installed:
+- Docker Engine 20.10+
+- Docker Compose V2+
+- Git
+
+## Quick Start
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/BhaveshBytess/PREDICTIVE-MAINTENANCE.git
+    cd PREDICTIVE-MAINTENANCE
+    ```
+  </Step>
+
+  <Step title="Start all services">
+    Launch both backend and frontend containers:
+    
+    ```bash
+    docker-compose up --build
+    ```
+    
+    For background execution:
+    
+    ```bash
+    docker-compose up -d
+    ```
+  </Step>
+
+  <Step title="Access the application">
+    Once started, access:
+    
+    - **Frontend**: http://localhost:5173
+    - **Backend API**: http://localhost:8000
+    - **API Documentation**: http://localhost:8000/docs
+    - **Health Check**: http://localhost:8000/health
+  </Step>
+</Steps>
+
+## Docker Compose Configuration
+
+The `docker-compose.yml` defines two main services:
+
+### Backend Service
+
+```yaml
+backend:
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+  container_name: pm_backend
+  restart: unless-stopped
+  ports:
+    - "8000:8000"
+  env_file:
+    - ./backend/.env
+  environment:
+    - ENVIRONMENT=local
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 10s
+```
+
+**Key features:**
+- `restart: unless-stopped` - Auto-restarts on failure
+- Health checks every 30 seconds
+- Environment variables loaded from `backend/.env`
+- Exposed on port 8000
+
+### Frontend Service
+
+```yaml
+frontend:
+  build:
+    context: ./frontend
+    dockerfile: Dockerfile
+    args:
+      - VITE_API_URL=http://localhost:8000
+  container_name: pm_frontend
+  restart: unless-stopped
+  ports:
+    - "5173:80"
+  depends_on:
+    - backend
+```
+
+**Key features:**
+- Multi-stage build with nginx
+- Depends on backend service
+- Production-optimized React build
+- Exposed on port 5173 (mapped to internal port 80)
+
+## Environment Configuration
+
+<Steps>
+  <Step title="Backend environment">
+    Create `backend/.env` from the example:
+    
+    ```bash
+    cp backend/.env.example backend/.env
+    ```
+    
+    Configure your InfluxDB connection:
+    
+    ```env
+    # Environment
+    ENVIRONMENT=local
+    
+    # API Configuration
+    API_V1_STR=/api/v1
+    PROJECT_NAME=Predictive Maintenance
+    
+    # InfluxDB Configuration
+    INFLUX_URL=http://localhost:8086
+    INFLUX_TOKEN=your-influxdb-token-here
+    INFLUX_ORG=your-organization
+    INFLUX_BUCKET=sensor_data
+    ```
+  </Step>
+
+  <Step title="Frontend environment (optional)">
+    Create `frontend/.env.local` if needed:
+    
+    ```bash
+    cp frontend/.env.example frontend/.env.local
+    ```
+    
+    ```env
+    # API Configuration
+    VITE_API_URL=http://localhost:8000
+    ```
+    
+    <Note>
+    For Docker deployment, the API URL is passed as a build argument in `docker-compose.yml`, so this file is optional.
+    </Note>
+  </Step>
+</Steps>
+
+## Docker Commands Reference
+
+### Service Management
+
+<CodeGroup>
+
+```bash Start all services
+docker-compose up -d
+```
+
+```bash Start backend only
+docker-compose up backend
+```
+
+```bash Stop all services
+docker-compose down
+```
+
+```bash Restart services
+docker-compose restart
+```
+
+```bash Rebuild and start
+docker-compose up --build
+```
+
+</CodeGroup>
+
+### Monitoring and Logs
+
+<CodeGroup>
+
+```bash View all logs
+docker-compose logs -f
+```
+
+```bash View backend logs
+docker-compose logs -f backend
+```
+
+```bash View frontend logs
+docker-compose logs -f frontend
+```
+
+```bash Check service status
+docker-compose ps
+```
+
+</CodeGroup>
+
+### Container Management
+
+<CodeGroup>
+
+```bash Execute command in backend
+docker-compose exec backend bash
+```
+
+```bash View container stats
+docker stats
+```
+
+```bash Remove all containers and volumes
+docker-compose down -v
+```
+
+</CodeGroup>
+
+## Optional: Local InfluxDB
+
+For complete isolation, run InfluxDB locally instead of using InfluxDB Cloud:
+
+<Steps>
+  <Step title="Uncomment InfluxDB service">
+    Edit `docker-compose.yml` and uncomment the InfluxDB section:
+    
+    ```yaml
+    influxdb:
+      image: influxdb:2.7-alpine
+      container_name: pm_influxdb
+      restart: unless-stopped
+      ports:
+        - "8086:8086"
+      environment:
+        - DOCKER_INFLUXDB_INIT_MODE=setup
+        - DOCKER_INFLUXDB_INIT_USERNAME=admin
+        - DOCKER_INFLUXDB_INIT_PASSWORD=adminpassword
+        - DOCKER_INFLUXDB_INIT_ORG=predictive_maintenance
+        - DOCKER_INFLUXDB_INIT_BUCKET=sensor_data
+        - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-secret-token
+      volumes:
+        - influxdb_data:/var/lib/influxdb2
+    ```
+    
+    Also uncomment the volumes section:
+    
+    ```yaml
+    volumes:
+      influxdb_data:
+    ```
+  </Step>
+
+  <Step title="Update backend environment">
+    Modify `backend/.env` to connect to the local InfluxDB:
+    
+    ```env
+    INFLUX_URL=http://influxdb:8086
+    INFLUX_TOKEN=my-super-secret-token
+    INFLUX_ORG=predictive_maintenance
+    INFLUX_BUCKET=sensor_data
+    ```
+  </Step>
+
+  <Step title="Restart services">
+    ```bash
+    docker-compose down
+    docker-compose up -d
+    ```
+    
+    Access InfluxDB UI at http://localhost:8086
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### Port Already in Use
+
+**Problem**: Error `port is already allocated`
+
+**Solution**: Change the port mapping in `docker-compose.yml`:
+
+```yaml
+ports:
+  - "8001:8000"  # Changed from 8000:8000
+```
+
+### Backend Health Check Failing
+
+**Problem**: Container repeatedly restarting
+
+**Solution**: Check logs and verify InfluxDB connection:
+
+```bash
+docker-compose logs backend
+```
+
+Verify environment variables:
+
+```bash
+docker-compose exec backend env | grep INFLUX
+```
+
+### Build Failures
+
+**Problem**: `Error response from daemon: failed to build`
+
+**Solution**: Clear Docker cache and rebuild:
+
+```bash
+docker-compose down
+docker system prune -a
+docker-compose up --build
+```
+
+### Cannot Connect to Backend from Frontend
+
+**Problem**: API requests failing in browser
+
+**Solution**: Ensure services are on the same network. Check with:
+
+```bash
+docker network inspect predictive-maintenance_default
+```
+
+For browser access, use `http://localhost:8000`, not the container name.
+
+## Production Considerations
+
+<Warning>
+Docker Compose is designed for development and testing. For production deployments, use:
+- **Backend**: Render, Railway, or AWS ECS
+- **Frontend**: Vercel, Netlify, or Cloudflare Pages
+- **Database**: InfluxDB Cloud
+
+See [Production Deployment](/deployment/production) for details.
+</Warning>
+
+### Security Hardening
+
+For production-like local deployment:
+
+1. **Use secrets management**:
+   ```bash
+   docker secret create influx_token /path/to/token
+   ```
+
+2. **Enable TLS**:
+   Add nginx reverse proxy with Let's Encrypt certificates
+
+3. **Limit container resources**:
+   ```yaml
+   deploy:
+     resources:
+       limits:
+         cpus: '0.5'
+         memory: 512M
+   ```
+
+4. **Use specific image tags** (not `latest`):
+   ```yaml
+   image: influxdb:2.7.1-alpine
+   ```
+
+## Next Steps
+
+- Learn about [Local Development](/deployment/local-development) for manual setup
+- Configure [Production Deployment](/deployment/production) on cloud platforms
+- Explore the [API Reference](/api/authentication) for integration

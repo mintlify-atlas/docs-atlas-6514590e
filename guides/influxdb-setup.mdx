@@ -1,0 +1,346 @@
+---
+title: InfluxDB Setup
+description: Configure InfluxDB Cloud for time-series sensor data storage
+---
+
+The Predictive Maintenance system uses **InfluxDB Cloud** as its primary time-series database for storing sensor data, features, anomalies, and operator logs.
+
+## Why InfluxDB?
+
+InfluxDB is optimized for time-series data with:
+
+- **High write throughput** for sensor ingestion (100Hz+ supported)
+- **Efficient storage** with automatic downsampling and retention policies
+- **Powerful querying** using Flux language for feature engineering
+- **Cloud-managed** infrastructure (no server maintenance)
+- **Free tier** with 30-day retention and 10,000 write requests/day
+
+## Setup Process
+
+<Steps>
+  <Step title="Create InfluxDB Cloud account">
+    Sign up for a free account at [InfluxData Cloud](https://cloud2.influxdata.com).
+    
+    **Recommended region:** AWS us-east-1 (lowest latency for US-based deployments)
+  </Step>
+
+  <Step title="Create a bucket">
+    Navigate to **Load Data > Buckets** in the InfluxDB UI.
+    
+    Click **+ Create Bucket** and configure:
+    
+    - **Name:** `sensor_data` (must match backend configuration)
+    - **Retention:** 30 days (free tier) or custom
+    - **Description:** Time-series data for predictive maintenance
+    
+    <Tip>
+      The bucket name `sensor_data` is hardcoded in the default configuration. If you use a different name, update the `INFLUX_BUCKET` environment variable.
+    </Tip>
+  </Step>
+
+  <Step title="Generate an API token">
+    Go to **Load Data > API Tokens** and click **+ Generate API Token**.
+    
+    Select **All Access Token** to grant read/write permissions.
+    
+    <Warning>
+      **Copy the token immediately!** It will only be displayed once. If you lose it, you'll need to generate a new token.
+    </Warning>
+    
+    Store it securely in a password manager or environment file.
+  </Step>
+
+  <Step title="Get your organization ID">
+    Click your user profile in the top-right corner and select **About**.
+    
+    Copy the **Organization ID** (a hexadecimal string like `a1b2c3d4e5f6g7h8`).
+  </Step>
+
+  <Step title="Find your instance URL">
+    The URL is shown in the browser address bar:
+    
+    ```
+    https://us-east-1-1.aws.cloud2.influxdata.com
+    ```
+    
+    Common regions:
+    - **AWS US East:** `https://us-east-1-1.aws.cloud2.influxdata.com`
+    - **AWS US West:** `https://us-west-2-1.aws.cloud2.influxdata.com`
+    - **AWS EU Central:** `https://eu-central-1-1.aws.cloud2.influxdata.com`
+  </Step>
+</Steps>
+
+## Environment Configuration
+
+### Local Development
+
+Create a `backend/.env` file (or `.env` in the project root):
+
+```env
+# InfluxDB Cloud Configuration
+INFLUX_URL=https://us-east-1-1.aws.cloud2.influxdata.com
+INFLUX_TOKEN=your-api-token-here
+INFLUX_ORG=a1b2c3d4e5f6g7h8
+INFLUX_BUCKET=sensor_data
+
+# Optional: Application Settings
+ENVIRONMENT=local
+```
+
+<Warning>
+  **Never commit `.env` files to version control!** Add `.env` to your `.gitignore` to prevent accidental exposure of credentials.
+</Warning>
+
+### Docker Compose
+
+Add environment variables to `docker-compose.yml`:
+
+```yaml
+services:
+  backend:
+    build: .
+    environment:
+      - INFLUX_URL=https://us-east-1-1.aws.cloud2.influxdata.com
+      - INFLUX_TOKEN=${INFLUX_TOKEN}
+      - INFLUX_ORG=${INFLUX_ORG}
+      - INFLUX_BUCKET=sensor_data
+    env_file:
+      - .env
+```
+
+Then create a `.env` file in the same directory:
+
+```env
+INFLUX_TOKEN=your-api-token-here
+INFLUX_ORG=a1b2c3d4e5f6g7h8
+```
+
+### Production Deployment (Render)
+
+In the Render dashboard, go to your service settings and add environment variables:
+
+| Key | Value |
+|-----|-------|
+| `INFLUX_URL` | `https://us-east-1-1.aws.cloud2.influxdata.com` |
+| `INFLUX_TOKEN` | `your-api-token-here` |
+| `INFLUX_ORG` | `a1b2c3d4e5f6g7h8` |
+| `INFLUX_BUCKET` | `sensor_data` |
+| `ENVIRONMENT` | `production` |
+
+<Tip>
+  Render automatically redeploys your service when environment variables are updated.
+</Tip>
+
+### Vercel Frontend (Optional)
+
+The frontend doesn't need direct InfluxDB access (it queries the backend API), but you can configure the API URL:
+
+```env
+VITE_API_URL=https://predictive-maintenance-uhlb.onrender.com
+```
+
+## Verification
+
+### Test Database Connection
+
+Use the FastAPI health endpoint to verify InfluxDB connectivity:
+
+<CodeGroup>
+```bash cURL
+curl http://localhost:8000/health
+```
+
+```python Python
+import requests
+
+response = requests.get("http://localhost:8000/health")
+print(response.json())
+```
+
+```javascript JavaScript
+fetch('http://localhost:8000/health')
+  .then(res => res.json())
+  .then(data => console.log(data));
+```
+</CodeGroup>
+
+**Expected response:**
+
+```json
+{
+  "status": "healthy",
+  "db_connected": true
+}
+```
+
+If `db_connected: false`, check:
+
+1. **Token validity:** Regenerate if expired
+2. **Organization ID:** Verify it matches your account
+3. **Bucket existence:** Ensure `sensor_data` bucket is created
+4. **Network access:** Check firewall rules (InfluxDB Cloud uses HTTPS/443)
+
+### Manual Query Test
+
+You can test the connection directly using the InfluxDB Python client:
+
+```python
+from influxdb_client import InfluxDBClient
+import os
+
+url = os.getenv("INFLUX_URL")
+token = os.getenv("INFLUX_TOKEN")
+org = os.getenv("INFLUX_ORG")
+bucket = os.getenv("INFLUX_BUCKET")
+
+client = InfluxDBClient(url=url, token=token, org=org)
+
+# Test query
+query_api = client.query_api()
+query = f'from(bucket: "{bucket}") |> range(start: -1h) |> limit(n: 5)'
+result = query_api.query(query)
+
+for table in result:
+    for record in table.records:
+        print(record.values)
+
+client.close()
+```
+
+## Data Schema
+
+The system writes data to InfluxDB using these measurements:
+
+### sensor_data (Raw Sensor Readings)
+
+| Field | Type | Unit | Description |
+|-------|------|------|-------------|
+| `voltage_v` | float | Volts | Line voltage |
+| `current_a` | float | Amperes | Line current |
+| `power_factor` | float | Unitless | Power factor (0-1) |
+| `vibration_g` | float | g-force | Acceleration |
+| `power_kw` | float | Kilowatts | Active power |
+
+**Tags:**
+- `asset_id`: Unique asset identifier (e.g., `motor_01`)
+- `operating_state`: `RUNNING`, `IDLE`, or `OFF`
+
+### features (Engineered Features)
+
+| Field | Description |
+|-------|-------------|
+| `voltage_rolling_mean_1h` | 1-hour moving average of voltage |
+| `current_spike_count` | Number of current spikes in 10-point window |
+| `power_factor_efficiency_score` | Normalized efficiency (0-100) |
+| `vibration_intensity_rms` | RMS vibration intensity |
+| `voltage_stability` | Deviation from 230V nominal |
+| `power_vibration_ratio` | Vibration per unit power factor |
+
+### anomalies (ML Predictions)
+
+| Field | Description |
+|-------|-------------|
+| `anomaly_score` | Isolation Forest score (0-1) |
+| `batch_anomaly_score` | Batch model score (0-1) |
+| `health_score` | Overall health (0-100) |
+| `risk_level` | `LOW`, `MODERATE`, `HIGH`, `CRITICAL` |
+| `degradation_index` | Cumulative damage (0-1) |
+| `damage_rate` | Rate of health decline (per hour) |
+| `rul_hours` | Remaining useful life (hours) |
+
+### operator_logs (Maintenance Events)
+
+| Field | Description |
+|-------|-------------|
+| `message` | Event description |
+| `severity` | `INFO`, `WARNING`, `CRITICAL` |
+| `technician` | Operator name |
+
+## Retention and Downsampling
+
+### Free Tier Limits
+
+- **Retention:** 30 days
+- **Write rate:** 10,000 writes/day
+- **Query rate:** Unlimited
+- **Storage:** 10 MB
+
+<Warning>
+  At 1 write/second (1Hz), you'll hit the free tier limit in ~2.8 hours/day. For 24/7 operation, upgrade to the **Usage-Based Plan** ($0.002 per 1,000 writes).
+</Warning>
+
+### Downsampling Task (Optional)
+
+To reduce storage, create a downsampling task that aggregates 1-second data into 1-minute averages:
+
+```flux
+option task = {name: "Downsample Sensor Data", every: 1h}
+
+from(bucket: "sensor_data")
+  |> range(start: -1h)
+  |> filter(fn: (r) => r._measurement == "sensor_data")
+  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)
+  |> to(bucket: "sensor_data_downsampled", org: "your-org")
+```
+
+This reduces write volume by 60x while preserving trends.
+
+## Troubleshooting
+
+### Error: "unauthorized access"
+
+**Cause:** Invalid or expired API token.
+
+**Solution:**
+1. Regenerate a new API token in the InfluxDB UI
+2. Update the `INFLUX_TOKEN` environment variable
+3. Restart the backend service
+
+### Error: "bucket not found"
+
+**Cause:** The `INFLUX_BUCKET` variable doesn't match the actual bucket name.
+
+**Solution:**
+- Verify bucket name in InfluxDB UI matches `sensor_data`
+- Or update `INFLUX_BUCKET` to match your custom bucket name
+
+### Error: "organization not found"
+
+**Cause:** Incorrect `INFLUX_ORG` value.
+
+**Solution:**
+1. Go to InfluxDB UI > Profile > About
+2. Copy the **Organization ID** (not the organization name)
+3. Update `INFLUX_ORG` with the correct ID
+
+### High Write Latency
+
+**Cause:** Cross-region latency (e.g., EU backend writing to US-East InfluxDB).
+
+**Solution:**
+- Use an InfluxDB region close to your backend deployment
+- Enable batching in the write API (automatically handled by the backend)
+
+## Security Best Practices
+
+<Card title="Production Security Checklist" icon="shield-check">
+  - ✅ Use **All Access Tokens** only in secure environments
+  - ✅ Generate **scoped tokens** (read-only, write-only) for specific services
+  - ✅ Rotate tokens every 90 days
+  - ✅ Store tokens in secret managers (AWS Secrets Manager, Vercel Secrets)
+  - ✅ Never log token values in application code
+  - ✅ Use environment variables, not hardcoded strings
+  - ✅ Enable IP allowlisting in InfluxDB Cloud (Enterprise plan)
+</Card>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Calibration Workflow" icon="gauge" href="/guides/calibration-workflow">
+    Configure baseline models using stored data
+  </Card>
+  
+  <Card title="Data Generator" icon="database" href="/guides/data-generator">
+    Populate InfluxDB with test sensor data
+  </Card>
+</CardGroup>

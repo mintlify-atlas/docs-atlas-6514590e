@@ -1,0 +1,175 @@
+---
+title: Introduction
+description: Industrial Asset Health Monitoring with ML-Powered Anomaly Detection
+---
+
+<img
+  className="block dark:hidden"
+  src="/images/hero-light.svg"
+  alt="Hero Light"
+/>
+<img
+  className="hidden dark:block"
+  src="/images/hero-dark.svg"
+  alt="Hero Dark"
+/>
+
+# Predictive Maintenance System
+
+An end-to-end **Predictive Maintenance** system that monitors industrial assets (motors, pumps, compressors) in real-time and predicts maintenance needs before failures occur.
+
+<Note>
+  Real-time sensor monitoring • Dual Isolation Forest anomaly detection • 100Hz batch feature ML • Health scoring • PDF/Excel reporting
+</Note>
+
+## Get Started
+
+Get your predictive maintenance system up and running in minutes.
+
+<CardGroup cols={2}>
+  <Card
+    title="Quickstart"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Get the system running locally with Docker in under 5 minutes
+  </Card>
+  <Card
+    title="Architecture"
+    icon="diagram-project"
+    href="/architecture"
+  >
+    Understand the system architecture and ML pipeline
+  </Card>
+  <Card
+    title="API Reference"
+    icon="code"
+    href="/api/authentication"
+  >
+    Explore the REST API endpoints and integration options
+  </Card>
+  <Card
+    title="Dashboard"
+    icon="chart-line"
+    href="https://predictive-maintenance-ten.vercel.app/"
+  >
+    Try the live demo with real-time monitoring
+  </Card>
+</CardGroup>
+
+## Key Capabilities
+
+<CardGroup cols={3}>
+  <Card title="Sensor Ingestion" icon="plug">
+    Real-time voltage, current, power factor, vibration data via REST API
+  </Card>
+  <Card title="Feature Engineering" icon="wrench">
+    Rolling means, spike detection, efficiency scores, RMS calculations
+  </Card>
+  <Card title="Anomaly Detection" icon="robot">
+    Isolation Forest model trained on healthy baseline data
+  </Card>
+  <Card title="Health Assessment" icon="heart-pulse">
+    0-100 health score with risk classification (LOW → CRITICAL)
+  </Card>
+  <Card title="Fault Simulation" icon="slider">
+    Configurable severity levels (MILD/MEDIUM/SEVERE) for targeted testing
+  </Card>
+  <Card title="Explainability" icon="lightbulb">
+    Human-readable explanations: "Vibration 3.2σ above normal"
+  </Card>
+  <Card title="Dashboard" icon="chart-simple">
+    React + Recharts real-time visualization with glassmorphism UI
+  </Card>
+  <Card title="Reporting" icon="file-pdf">
+    Role-specialized reports: Executive PDF, Multi-sheet Excel, Industrial Certificate
+  </Card>
+  <Card title="Operator Logs" icon="clipboard-list">
+    Ground-truth maintenance event logging with InfluxDB persistence
+  </Card>
+  <Card title="Baseline Benchmarking" icon="bullseye">
+    Live status cards display baseline target values for instant comparison
+  </Card>
+  <Card title="Purge & Re-Calibrate" icon="rotate">
+    One-click system reset: wipes InfluxDB data + DI state, returns to IDLE
+  </Card>
+  <Card title="Cumulative Prognostics" icon="chart-line">
+    Monotonic Degradation Index (DI), Damage Rate, and Remaining Useful Life (RUL)
+  </Card>
+</CardGroup>
+
+## What Makes This System Unique?
+
+### Dual-Model ML Pipeline
+
+The system runs **two Isolation Forest models** trained during calibration:
+
+| Model | Features | Input | F1 Score | AUC-ROC | Jitter Detection |
+|-------|----------|-------|----------|---------|:---:|
+| **Legacy (v2)** | 6 | 1Hz averages | 78.1% | 1.000 | ❌ |
+| **Batch (v3)** | 16 | 100Hz windows | **99.6%** | **1.000** | ✅ |
+
+The batch model is primary for inference, catching variance-only faults invisible to traditional models.
+
+### Cumulative Degradation Index (DI)
+
+<Info>
+  **Monotonic damage accumulation** that reflects real-world physics: industrial equipment damage never decreases. A quiet minute doesn't erase a bearing crack.
+</Info>
+
+Key properties:
+- **Dead-Zone**: Batch scores below 0.65 (healthy noise) accumulate zero damage
+- **Hydration**: DI recovered from InfluxDB on restart—state survives process restarts
+- **Purge Reset**: One-click reset writes DI=0.0 to InfluxDB
+- **Prognostics**: Health score, damage rate, and Remaining Useful Life (RUL) all derived from DI
+
+### Explainable AI
+
+Every alert comes with human-readable explanations:
+
+```
+High vibration variance: σ=0.17g (5x normal baseline)
+Voltage spike detected: 3.2σ above rolling mean
+Power factor degradation: 0.78 (target: 0.92)
+```
+
+## Engineering Philosophy
+
+<Warning>
+  This system prioritizes **TRUST over theatrics**, **PHYSICS over hype**, and **ENGINEERING RIGOR over vanity metrics**.
+</Warning>
+
+We optimize for the metrics that matter in production:
+
+- Can maintenance teams **TRUST** the alerts?
+- Can auditors **VERIFY** the decisions?
+- Can engineers **EXPLAIN** the reasoning?
+
+If the answer to any of these is "no", the feature doesn't ship.
+
+## Live Deployment
+
+| Service | URL | Status |
+|---------|-----|--------|
+| **Frontend** | [predictive-maintenance-ten.vercel.app](https://predictive-maintenance-ten.vercel.app/) | ✅ Live |
+| **Backend API** | [predictive-maintenance-uhlb.onrender.com](https://predictive-maintenance-uhlb.onrender.com) | ✅ Live |
+| **API Documentation** | [predictive-maintenance-uhlb.onrender.com/docs](https://predictive-maintenance-uhlb.onrender.com/docs) | ✅ Live |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Get Started with Docker"
+    icon="docker"
+    href="/quickstart"
+  >
+    Follow our quickstart guide to run the system locally
+  </Card>
+  <Card
+    title="Explore the Architecture"
+    icon="sitemap"
+    href="/architecture"
+  >
+    Learn how the ML pipeline and data flow work
+  </Card>
+</CardGroup>

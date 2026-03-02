@@ -1,0 +1,805 @@
+---
+title: "Troubleshooting"
+description: "Common issues and solutions for the Predictive Maintenance System"
+icon: "wrench"
+---
+
+## Overview
+
+This guide covers common issues, error messages, and solutions based on real engineering challenges documented in the [ENGINEERING_LOG.md](https://github.com/BhaveshBytess/PREDICTIVE-MAINTENANCE/blob/main/ENGINEERING_LOG.md).
+
+---
+
+## InfluxDB Connection Issues
+
+<AccordionGroup>
+  <Accordion title="Error: 401 Unauthorized" icon="lock">
+    **Symptom:**
+    ```
+    ERROR: InfluxDBError: 401 Unauthorized
+    ```
+    
+    **Cause:** Invalid InfluxDB token or expired credentials.
+    
+    **Solution:**
+    
+    1. Verify token in `.env` file:
+       ```bash
+       cat backend/.env | grep INFLUX_TOKEN
+       ```
+    
+    2. Generate a new token in InfluxDB Cloud:
+       - Go to [InfluxDB Cloud](https://cloud2.influxdata.com)
+       - Navigate to **Data > API Tokens**
+       - Click **Generate API Token** → **All Access Token**
+       - Copy and update `INFLUX_TOKEN` in `.env`
+    
+    3. Restart the backend:
+       ```bash
+       docker-compose restart backend
+       ```
+  </Accordion>
+  
+  <Accordion title="Error: Connection refused" icon="plug">
+    **Symptom:**
+    ```
+    ERROR: [Errno 111] Connection refused
+    ```
+    
+    **Cause:** Backend cannot reach InfluxDB (wrong URL or network issue).
+    
+    **Solution:**
+    
+    1. Verify `INFLUX_URL` matches your InfluxDB Cloud region:
+       ```env
+       # US East
+       INFLUX_URL=https://us-east-1-1.aws.cloud2.influxdata.com
+       
+       # US West
+       INFLUX_URL=https://us-west-2-1.aws.cloud2.influxdata.com
+       
+       # EU Central
+       INFLUX_URL=https://eu-central-1-1.aws.cloud2.influxdata.com
+       ```
+    
+    2. Test connectivity:
+       ```bash
+       curl -I $INFLUX_URL/health
+       ```
+    
+    3. Check firewall/VPN settings blocking port 443
+  </Accordion>
+  
+  <Accordion title="Error: Query returned 0 results despite data existing" icon="database">
+    **Symptom:**
+    ```
+    Expected data for Motor-01, got 0 results
+    ```
+    
+    **Cause:** Flux query filter applied **before** `pivot()` (see ENGINEERING_LOG Phase 2).
+    
+    **Solution:**
+    
+    **WRONG:**
+    ```flux
+    from(bucket: "sensor_data")
+      |> range(start: -1h)
+      |> filter(fn: (r) => r.asset_id == "Motor-01")  // ❌ Before pivot
+      |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+    ```
+    
+    **CORRECT:**
+    ```flux
+    from(bucket: "sensor_data")
+      |> range(start: -1h)
+      |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+      |> filter(fn: (r) => r.asset_id == "Motor-01")  // ✅ After pivot
+    ```
+    
+    **Explanation:** Tag-based filters must come **after** `pivot()` when using pivoted column names.
+  </Accordion>
+  
+  <Accordion title="Error: Data available but queries return empty" icon="clock">
+    **Symptom:**
+    Integration tests fail intermittently with 0 results immediately after writes.
+    
+    **Cause:** InfluxDB 2.x has **eventual consistency** (see ENGINEERING_LOG Phase 2).
+    
+    **Solution:**
+    
+    Add a delay after writes before querying:
+    
+    ```python
+    import time
+    
+    # Write data
+    db.write_sensor_event(...)
+    
+    # Wait for data to become queryable
+    time.sleep(5)  # Minimum 5 seconds for InfluxDB Cloud
+    
+    # Now query
+    results = db.query_sensor_data(...)
+    ```
+    
+    **Best Practice:** For production, use **write confirmations** via InfluxDB's `/write` response.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Model Loading Errors
+
+<AccordionGroup>
+  <Accordion title="Error: No module named 'sklearn'" icon="box">
+    **Symptom:**
+    ```
+    ModuleNotFoundError: No module named 'sklearn'
+    ```
+    
+    **Cause:** Scikit-learn not installed or virtual environment not activated.
+    
+    **Solution:**
+    
+    ```bash
+    # Activate virtual environment
+    source venv/bin/activate  # Linux/Mac
+    .\venv\Scripts\activate   # Windows
+    
+    # Install dependencies
+    pip install -r requirements.txt
+    
+    # Verify installation
+    python -c "import sklearn; print(sklearn.__version__)"
+    ```
+  </Accordion>
+  
+  <Accordion title="Error: name 'np' is not defined (Type Annotations)" icon="code">
+    **Symptom:**
+    ```
+    NameError: name 'np' is not defined
+    ```
+    
+    **Cause:** Type annotations evaluated at import time, but `numpy` is lazy-loaded (see ENGINEERING_LOG Phase 18).
+    
+    **Solution:**
+    
+    Add this to the **top** of ML modules:
+    
+    ```python
+    from __future__ import annotations  # MUST be first import
+    
+    import numpy as np  # Inside function, not at module level
+    
+    def score(self, X: np.ndarray):  # Annotation is now a string
+        import numpy as np  # Lazy import
+        # ...
+    ```
+    
+    **Why:** `from __future__ import annotations` defers annotation evaluation (PEP 563).
+  </Accordion>
+  
+  <Accordion title="Error: Model file not found" icon="file">
+    **Symptom:**
+    ```
+    FileNotFoundError: backend/models/Motor-01_batch_detector_v3.pkl
+    ```
+    
+    **Cause:** Model hasn't been trained yet or file was deleted.
+    
+    **Solution:**
+    
+    1. Check if models directory exists:
+       ```bash
+       ls -la backend/models/
+       ```
+    
+    2. Calibrate the system to train models:
+       ```bash
+       curl -X POST http://localhost:8000/system/calibrate \
+         -H "Content-Type: application/json" \
+         -d '{"asset_id": "Motor-01", "duration_seconds": 300}'
+       ```
+    
+    3. Or retrain manually:
+       ```bash
+       python -m scripts.retrain_batch_model --asset Motor-01 --seconds 300
+       ```
+  </Accordion>
+  
+  <Accordion title="Warning: Model trained on X features, got Y" icon="triangle-exclamation">
+    **Symptom:**
+    ```
+    UserWarning: X has 12 features, but IsolationForest is expecting 16 features
+    ```
+    
+    **Cause:** Feature engineering code changed, but old model still loaded.
+    
+    **Solution:**
+    
+    1. Delete old models:
+       ```bash
+       rm backend/models/*.pkl
+       ```
+    
+    2. Retrain from scratch:
+       ```bash
+       python -m scripts.retrain_batch_model --asset Motor-01 --seconds 600
+       ```
+    
+    <Warning>
+      Changing feature definitions invalidates existing models. Always retrain when features change.
+    </Warning>
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## CORS Issues
+
+<AccordionGroup>
+  <Accordion title="Error: CORS policy blocked (Port 3001)" icon="shield">
+    **Symptom:**
+    ```
+    Access to fetch at 'http://localhost:8000/health' from origin 'http://localhost:3001'
+    has been blocked by CORS policy
+    ```
+    
+    **Cause:** Frontend running on alternate port (3001) not in CORS allowed origins (see ENGINEERING_LOG Phase 12).
+    
+    **Solution:**
+    
+    Add the port to `backend/api/main.py`:
+    
+    ```python
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:3000",
+            "http://localhost:3001",  # Add this
+            "http://localhost:5173",
+            "http://127.0.0.1:3001",  # And this
+            # ...
+        ],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
+    ```
+    
+    Restart the backend:
+    ```bash
+    docker-compose restart backend
+    ```
+  </Accordion>
+  
+  <Accordion title="Error: Method PUT not allowed" icon="ban">
+    **Symptom:**
+    ```
+    405 Method Not Allowed: PUT requests blocked by CORS
+    ```
+    
+    **Cause:** `PUT` not in `allow_methods` (see ENGINEERING_LOG Phase 20).
+    
+    **Solution:**
+    
+    Update CORS config:
+    ```python
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # Add PUT, DELETE, OPTIONS
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Render Free Tier Issues
+
+<AccordionGroup>
+  <Accordion title="Error: 503 Service Unavailable (Cold Start)" icon="snowflake">
+    **Symptom:**
+    ```
+    Error: 503 Site Can't Be Reached
+    ```
+    
+    After 15 minutes of inactivity, first request fails or times out.
+    
+    **Cause:** Render free tier **spins down** containers after inactivity. Cold start takes 30-60 seconds (see ENGINEERING_LOG Phase 18).
+    
+    **Solution:**
+    
+    **Option 1: Keep-Alive Heartbeat (Implemented)**
+    
+    The frontend sends a ping every 10 minutes:
+    ```javascript
+    setInterval(() => {
+      fetch(`${API_URL}/ping`).catch(() => {});
+    }, 10 * 60 * 1000);
+    ```
+    
+    **Option 2: Upgrade to Render Starter**
+    
+    $7/month removes cold starts and spin-downs.
+    
+    **Option 3: External Keep-Alive Service**
+    
+    Use [UptimeRobot](https://uptimerobot.com) (free) to ping `/health` every 5 minutes.
+  </Accordion>
+  
+  <Accordion title="Error: Container killed during startup" icon="skull">
+    **Symptom:**
+    Render logs show:
+    ```
+    Starting service...
+    Importing sklearn...
+    [KILLED] Out of memory
+    ```
+    
+    **Cause:** Heavy ML imports (`sklearn`, `numpy`, `pandas`) at module level exceed 512MB RAM limit (see ENGINEERING_LOG Phase 18).
+    
+    **Solution:**
+    
+    **Lazy-load ML dependencies:**
+    
+    ```python
+    # ❌ DON'T: Module-level imports
+    import numpy as np
+    from sklearn.ensemble import IsolationForest
+    
+    class BatchAnomalyDetector:
+        def train(self, data):
+            # Use np and IsolationForest
+    
+    # ✅ DO: Lazy imports inside functions
+    class BatchAnomalyDetector:
+        def train(self, data):
+            import numpy as np
+            from sklearn.ensemble import IsolationForest
+            # Now use them
+    ```
+    
+    **Also add:**
+    ```python
+    from __future__ import annotations  # First line
+    ```
+    
+    This defers type annotation evaluation, preventing import-time failures.
+  </Accordion>
+  
+  <Accordion title="Health check timeout" icon="clock">
+    **Symptom:**
+    Render dashboard shows "Health check failed" during startup.
+    
+    **Cause:** `/health` endpoint loads heavy ML modules, exceeding health check timeout.
+    
+    **Solution:**
+    
+    Use a **lightweight** `/ping` endpoint for health checks:
+    
+    ```python
+    @app.get("/ping")
+    def ping():
+        return {"status": "ok"}  # No DB, no ML imports
+    ```
+    
+    Update Render health check path:
+    1. Open Render Dashboard → Service Settings
+    2. Health Check Path: `/ping`
+    3. Save
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Windows Development Issues
+
+<AccordionGroup>
+  <Accordion title="Error: Vercel Error 126 (Permission Denied)" icon="windows">
+    **Symptom:**
+    Vercel deployment fails:
+    ```
+    Error 126: Permission denied: node_modules/.bin/vite
+    ```
+    
+    **Cause:** Windows binaries in `node_modules/` committed to Git (see README).
+    
+    **Solution:**
+    
+    1. Add `node_modules/` to `.gitignore`:
+       ```
+       node_modules/
+       ```
+    
+    2. Remove from Git history:
+       ```bash
+       git rm -r --cached node_modules/
+       git commit -m "Remove node_modules from Git"
+       git push
+       ```
+    
+    3. Vercel will install dependencies on Linux during build
+    
+    <Warning>
+      **NEVER** commit `node_modules/` from Windows. It causes cross-platform deployment failures.
+    </Warning>
+  </Accordion>
+  
+  <Accordion title="Error: 'venv\Scripts\activate' not recognized" icon="terminal">
+    **Symptom:**
+    ```
+    'venv\Scripts\activate' is not recognized as an internal or external command
+    ```
+    
+    **Cause:** Using Linux command syntax on Windows.
+    
+    **Solution:**
+    
+    Use correct activation command:
+    ```powershell
+    # PowerShell
+    .\venv\Scripts\Activate.ps1
+    
+    # Command Prompt
+    .\venv\Scripts\activate.bat
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Data Quality Issues
+
+<AccordionGroup>
+  <Accordion title="False positives: Healthy data flagged as anomalous" icon="triangle-exclamation">
+    **Symptom:**
+    System shows red anomaly lines during normal operations (no fault injected).
+    
+    **Cause:** Three potential issues (see ENGINEERING_LOG Phase 17):
+    
+    1. **Overly sensitive range checks** (10% tolerance too strict)
+    2. **Majority aggregation threshold too low** ({"<"}15% anomalous points)
+    3. **No event debouncing** (single-tick transitions)
+    
+    **Solution:**
+    
+    **1. Widen tolerance** in `system_routes.py` and `integration_routes.py`:
+    ```python
+    # Change from 10% to 25%
+    tolerance = 0.25
+    ```
+    
+    **2. Require majority vote** in `database.py`:
+    ```python
+    # At least 15/100 points must be anomalous
+    is_faulty = 1 if is_faulty_val >= 0.15 else 0
+    ```
+    
+    **3. Add debounce** in `EventEngine`:
+    ```python
+    # Require 2 consecutive faulty seconds before firing event
+    if self._consecutive_faulty_count >= 2:
+        self._fire_anomaly_detected()
+    ```
+  </Accordion>
+  
+  <Accordion title="Health drops to 66% on startup with no fault" icon="heart">
+    **Symptom:**
+    Degradation Index (DI) increases during healthy monitoring.
+    
+    **Cause:** **Self-Harming DI bug** — healthy noise accumulates phantom damage (see ENGINEERING_LOG Phase 20).
+    
+    **Solution:**
+    
+    Implement **dead-zone** in `assessor.py`:
+    
+    ```python
+    HEALTHY_FLOOR = 0.65  # Scores below this = zero damage
+    
+    if batch_score < HEALTHY_FLOOR:
+        effective_severity = 0.0  # No damage
+    else:
+        # Remap scores ≥ 0.65 to [0, 1]
+        effective_severity = (batch_score - HEALTHY_FLOOR) / (1.0 - HEALTHY_FLOOR)
+    
+    # Only effective_severity > 0 accumulates DI
+    DI_increment = (effective_severity ** 2) * SENSITIVITY_CONSTANT * dt
+    ```
+  </Accordion>
+  
+  <Accordion title="Jitter faults not detected" icon="wave-square">
+    **Symptom:**
+    Motor with high vibration variance (σ=0.17g) but normal mean (0.15g) shows health=100%.
+    
+    **Cause:** Legacy v2 model only sees 1Hz averages, not variance (see ENGINEERING_LOG Phase 15).
+    
+    **Solution:**
+    
+    Ensure **batch model (v3)** is active:
+    
+    1. Check model file exists:
+       ```bash
+       ls -la backend/models/*_batch_detector_v3.pkl
+       ```
+    
+    2. If missing, retrain:
+       ```bash
+       python -m scripts.retrain_batch_model --asset Motor-01 --seconds 600
+       ```
+    
+    3. Restart backend to load batch model:
+       ```bash
+       docker-compose restart backend
+       ```
+    
+    **Why v3 detects jitter:**
+    - v3 has **std** and **peak_to_peak** features
+    - v2 only has **mean** (blind to variance)
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Chart Visualization Issues
+
+<AccordionGroup>
+  <Accordion title="Chart line floats in the air on startup" icon="chart-line">
+    **Symptom:**
+    Chart shows single data point suspended mid-axis, not anchored to X-axis.
+    
+    **Cause:** `connectNulls=true` connects single point to empty space (see ENGINEERING_LOG Phase 16).
+    
+    **Solution:**
+    
+    Only render lines when ≥2 points exist:
+    
+    ```jsx
+    {data.length >= 2 && (
+      <Line
+        type="monotone"
+        dataKey="voltage_v"
+        stroke="#3B82F6"
+        connectNulls={false}  // Don't connect across gaps
+      />
+    )}
+    ```
+  </Accordion>
+  
+  <Accordion title="Normal sensor noise looks like major anomalies" icon="chart-area">
+    **Symptom:**
+    Y-axis auto-scales to data range, making 0.01g vibration change look like a spike.
+    
+    **Cause:** Auto-scaling Y-axis domain (see ENGINEERING_LOG Phase 16).
+    
+    **Solution:**
+    
+    Use **fixed domains** per signal type:
+    
+    ```jsx
+    {/* Voltage axis */}
+    <YAxis yAxisId="voltage" domain={[0, 300]} />
+    
+    {/* Current axis (hidden) */}
+    <YAxis yAxisId="current" domain={[0, 40]} hide />
+    
+    {/* Vibration axis */}
+    <YAxis yAxisId="vibration" domain={[0, 2.0]} orientation="right" />
+    ```
+  </Accordion>
+  
+  <Accordion title="Chart X-axis grows instead of sliding window" icon="clock">
+    **Symptom:**
+    Time axis shows 0-60s and expands to 0-120s instead of sliding.
+    
+    **Cause:** `domain={['dataMin', 'dataMax']}` grows with data (see ENGINEERING_LOG Phase 16).
+    
+    **Solution:**
+    
+    Hard-code **60s right-anchored window**:
+    
+    ```jsx
+    <XAxis
+      dataKey="timestamp"
+      domain={[Date.now() - 60000, Date.now()]}  // Last 60 seconds
+      type="number"
+      tickFormatter={(ts) => new Date(ts).toLocaleTimeString()}
+    />
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Report Generation Issues
+
+<AccordionGroup>
+  <Accordion title="Excel Anomaly_Score column always empty" icon="file-excel">
+    **Symptom:**
+    Downloaded Excel report has blank `Anomaly_Score` column.
+    
+    **Cause:** Anomaly scores only computed at ingestion time, not at report generation (see ENGINEERING_LOG Phase 19).
+    
+    **Solution:**
+    
+    Compute range-check scores in `generator.py` during report creation:
+    
+    ```python
+    for row in sensor_data:
+        # Check if value exceeds baseline bounds
+        v = row["voltage_v"]
+        v_min, v_max = baseline["voltage_v"]
+        
+        if v < v_min or v > v_max:
+            row["anomaly_score"] = min((abs(v - v_min) / v_min), 1.0)
+        else:
+            row["anomaly_score"] = 0.0
+    ```
+  </Accordion>
+  
+  <Accordion title="Operator logs show test gibberish (asyfkk)" icon="comment">
+    **Symptom:**
+    PDF reports include operator log notes like "asyfkk" or "test123456".
+    
+    **Cause:** No validation on operator log input (see ENGINEERING_LOG Phase 19).
+    
+    **Solution:**
+    
+    Sanitize logs in report generators:
+    
+    ```python
+    import re
+    
+    VALID_LOG_PATTERN = re.compile(r"^[a-zA-Z0-9\s.,!?;:'\"\-]+$")
+    
+    for log in operator_logs:
+        if not VALID_LOG_PATTERN.match(log["description"]):
+            log["description"] = "Maintenance event recorded"
+    ```
+  </Accordion>
+  
+  <Accordion title="ReportLab error: 'Canvas' object has no attribute 'stroke'" icon="file-pdf">
+    **Symptom:**
+    ```
+    AttributeError: 'Canvas' object has no attribute 'stroke'
+    ```
+    
+    **Cause:** ReportLab API doesn't have `canvas.stroke()` (see ENGINEERING_LOG Phase 10).
+    
+    **Solution:**
+    
+    Use `drawPath()` for arcs:
+    
+    ```python
+    # ❌ WRONG
+    canvas.arc(...)
+    canvas.stroke()
+    
+    # ✅ CORRECT
+    path = canvas.beginPath()
+    path.arc(x, y, r, start_angle, end_angle)
+    canvas.drawPath(path, stroke=1, fill=0)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Environment Configuration
+
+<AccordionGroup>
+  <Accordion title="Warning: INFLUX_TOKEN not found (but it exists in .env)" icon="gear">
+    **Symptom:**
+    ```
+    WARNING: INFLUX_TOKEN environment variable not set
+    ```
+    
+    But `.env` file has `INFLUX_TOKEN=...`
+    
+    **Cause:** Validation checks `os.environ` instead of `settings` object (see ENGINEERING_LOG Phase 20).
+    
+    **Solution:**
+    
+    Check settings object, not raw env:
+    
+    ```python
+    # ❌ WRONG
+    if not os.environ.get("INFLUX_TOKEN"):
+        print("WARNING: Token missing")
+    
+    # ✅ CORRECT
+    from backend.config import settings
+    
+    if not settings.influx_token:
+        print("WARNING: Token missing")
+    ```
+  </Accordion>
+  
+  <Accordion title="requirements.txt lists packages not installed" icon="list">
+    **Symptom:**
+    ```
+    ERROR: Could not find a version that satisfies the requirement xyz==1.2.3
+    ```
+    
+    **Cause:** `requirements.txt` manually edited with wrong versions.
+    
+    **Solution:**
+    
+    Regenerate from actual environment:
+    
+    ```bash
+    # Activate venv
+    source venv/bin/activate
+    
+    # Freeze installed packages
+    pip freeze > requirements.txt
+    
+    # Remove local packages (if any)
+    sed -i '/^-e /d' requirements.txt
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Getting Help
+
+If your issue isn't covered here:
+
+<Steps>
+  <Step title="Check Engineering Log">
+    Review [ENGINEERING_LOG.md](https://github.com/BhaveshBytess/PREDICTIVE-MAINTENANCE/blob/main/ENGINEERING_LOG.md) for detailed technical context on past issues.
+  </Step>
+  
+  <Step title="Enable Debug Logging">
+    ```bash
+    # Add to .env
+    LOG_LEVEL=DEBUG
+    
+    # Restart backend
+    docker-compose restart backend
+    
+    # View detailed logs
+    docker-compose logs -f backend
+    ```
+  </Step>
+  
+  <Step title="Run Health Checks">
+    ```bash
+    # Backend health
+    curl http://localhost:8000/health
+    
+    # InfluxDB health
+    curl -H "Authorization: Token $INFLUX_TOKEN" $INFLUX_URL/health
+    
+    # System state
+    curl http://localhost:8000/system/state
+    ```
+  </Step>
+  
+  <Step title="Open GitHub Issue">
+    If still stuck, open an issue at [GitHub Issues](https://github.com/BhaveshBytess/PREDICTIVE-MAINTENANCE/issues) with:
+    - Error message and full stack trace
+    - Steps to reproduce
+    - Environment (Docker/systemd, OS, Python version)
+    - Relevant logs
+  </Step>
+</Steps>
+
+---
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Monitoring" icon="display" href="/guides/monitoring">
+    Production monitoring best practices
+  </Card>
+  
+  <Card title="Model Retraining" icon="brain" href="/guides/model-retraining">
+    Fix model accuracy issues
+  </Card>
+  
+  <Card title="InfluxDB Setup" icon="database" href="/guides/influxdb-setup">
+    Complete database configuration guide
+  </Card>
+  
+  <Card title="API Reference" icon="code" href="/api/health">
+    API endpoint documentation
+  </Card>
+</CardGroup>

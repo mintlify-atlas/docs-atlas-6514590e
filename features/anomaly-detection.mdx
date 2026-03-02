@@ -1,0 +1,363 @@
+---
+title: Anomaly Detection
+description: Dual Isolation Forest models, fault type detection (SPIKE/DRIFT/JITTER), and calibrated anomaly scoring
+---
+
+## Overview
+
+The system uses a **dual-model architecture** with Isolation Forest algorithms to detect anomalies in industrial sensor data. The models are trained on healthy baseline data and score deviations using inverted semantics: **0.0 = Normal, 1.0 = Highly Anomalous**.
+
+## Dual-Model Architecture
+
+Two Isolation Forest models run in parallel, each optimized for different temporal resolutions:
+
+| Model | Features | Input Frequency | F1 Score | AUC-ROC | Best For |
+|-------|----------|----------------|----------|---------|----------|
+| **Legacy (v2)** | 6 | 1 Hz (1-second avg) | 78.1% | 1.000 | Drift detection |
+| **Batch (v3)** | 16 | 100 Hz windows | **99.6%** | **1.000** | Spike + Jitter detection |
+
+<Info>
+  **Primary Model**: The batch model (v3) is used for inference during real-time monitoring due to superior performance on high-frequency fault patterns. The legacy model is retained for backward compatibility.
+</Info>
+
+## Batch Model (Primary)
+
+### 16-Dimensional Feature Vector
+
+Each 1-second window of 100 raw samples is reduced to 16 statistical features:
+
+| Signal | mean | std | peak_to_peak | rms | Total |
+|--------|:---:|:---:|:---:|:---:|:---:|
+| `voltage_v` | ✓ | ✓ | ✓ | ✓ | 4 |
+| `current_a` | ✓ | ✓ | ✓ | ✓ | 4 |
+| `power_factor` | ✓ | ✓ | ✓ | ✓ | 4 |
+| `vibration_g` | ✓ | ✓ | ✓ | ✓ | 4 |
+| **Total** | | | | | **16** |
+
+### Feature Calculations
+
+For each signal, the following statistics are computed:
+
+```python
+import numpy as np
+
+# Example: vibration_g batch of 100 samples
+vibration_samples = [0.10, 0.12, 0.11, ..., 0.13]  # 100 values
+
+# 1. Mean
+vibration_mean = np.mean(vibration_samples)  # 0.12
+
+# 2. Standard Deviation (population)
+vibration_std = np.std(vibration_samples)  # 0.015
+
+# 3. Peak-to-Peak
+vibration_p2p = np.max(vibration_samples) - np.min(vibration_samples)  # 0.05
+
+# 4. RMS (Root Mean Square)
+vibration_rms = np.sqrt(np.mean(np.square(vibration_samples)))  # 0.121
+```
+
+<Note>
+  **Why RMS?** RMS captures the "energy" of the signal and is more sensitive to outliers than mean. For vibration analysis, RMS is the industry standard (ISO 10816).
+</Note>
+
+## Legacy Model (Fallback)
+
+### 6-Dimensional Feature Set
+
+Derived features computed at 1 Hz:
+
+| Feature | Formula | Purpose |
+|---------|---------|----------|
+| `voltage_rolling_mean_1h` | Mean(voltage, 1 hour window) | Long-term drift |
+| `current_spike_count` | Count(points > 3σ, 10-point window) | Transient spikes |
+| `power_factor_efficiency_score` | `(PF - 0.8) / 0.2 * 100` | Efficiency degradation |
+| `vibration_intensity_rms` | RMS(vibration, past-only) | Mechanical health |
+| `voltage_stability` | `|voltage - 230.0|` | Grid deviation |
+| `power_vibration_ratio` | `vibration / (PF + 0.01)` | Cross-signal interaction |
+
+<Accordion title="Legacy Model Limitations">
+  The 1 Hz model **cannot detect jitter faults** where:
+  - Average vibration = 0.15g (normal)
+  - Standard deviation = 0.17g (5× healthy baseline)
+  
+  The mean-based features hide this high-variance pattern. The batch model detects it via the `vibration_std` feature.
+</Accordion>
+
+## Fault Type Detection
+
+### Supported Fault Patterns
+
+<CardGroup cols={2}>
+  <Card title="SPIKE" icon="bolt">
+    **Pattern**: Sharp transient surges in voltage/current  
+    **Detection**: `peak_to_peak` and `std` features exceed thresholds  
+    **Example**: Inrush current during motor start
+  </Card>
+  
+  <Card title="DRIFT" icon="arrow-trend-up">
+    **Pattern**: Gradual degradation over time  
+    **Detection**: `mean` values deviate from baseline  
+    **Example**: Bearing wear increasing vibration
+  </Card>
+  
+  <Card title="JITTER" icon="wave-pulse">
+    **Pattern**: Normal mean, abnormal variance  
+    **Detection**: High `std` and `peak_to_peak` with normal `mean`  
+    **Example**: Loose connection causing erratic readings  
+    **Model**: **Batch model only** (legacy model blind to jitter)
+  </Card>
+  
+  <Card title="DEFAULT" icon="triangle-exclamation">
+    **Pattern**: General anomaly not matching specific types  
+    **Detection**: Overall feature deviation  
+    **Example**: Combined electrical and mechanical issues
+  </Card>
+</CardGroup>
+
+### Fault Injection Example
+
+```http
+POST /system/inject-fault
+Content-Type: application/json
+
+{
+  "fault_type": "JITTER",
+  "severity": "MEDIUM"
+}
+```
+
+**Response**:
+```json
+{
+  "status": "injecting",
+  "fault_type": "JITTER",
+  "severity": "MEDIUM",
+  "message": "Fault injection active. Stop via /system/stop-fault."
+}
+```
+
+## Anomaly Scoring
+
+### Score Semantics
+
+The system uses **inverted scoring** for intuitive interpretation:
+
+| Score Range | Meaning | Health Impact |
+|-------------|---------|---------------|
+| 0.00 - 0.15 | Perfectly normal | Health 100-80 |
+| 0.15 - 0.35 | Minor deviation | Health 80-50 |
+| 0.35 - 0.65 | Moderate anomaly | Health 50-0 |
+| 0.65 - 1.00 | Severe anomaly | Health 0 (critical) |
+
+<Warning>
+  **Inverted Semantics**: Unlike typical ML models where higher scores mean "more confident," our anomaly scores represent **badness**. A score of 0.0 is ideal (perfect health).
+</Warning>
+
+### Calibration Process
+
+Scores are calibrated using quantile-based thresholding:
+
+```python
+# From detector.py:362-397
+def _calibrated_score(self, decision_value: float) -> float:
+    """
+    Convert Isolation Forest decision to calibrated anomaly score.
+    
+    Scikit-learn decision_function:
+    - Higher values = more normal
+    - Typically ranges from -0.5 to 0.5
+    
+    Calibration formula:
+    - raw_score = -decision_value (invert)
+    - threshold_score = 99th percentile of healthy data
+    - calibrated = raw_score / (threshold_score * 1.5)
+    - Clamp to [0, 1]
+    """
+    raw_score = -decision_value
+    calibration_factor = self._threshold_score * 1.5
+    
+    if calibration_factor > 0:
+        calibrated = raw_score / calibration_factor
+    else:
+        calibrated = raw_score + 0.5
+    
+    return float(np.clip(calibrated, 0.0, 1.0))
+```
+
+### Training on Healthy Baseline
+
+Models are trained **only on healthy data** to establish normal behavior:
+
+```python
+# Training constraints (detector.py:188-249)
+detector = AnomalyDetector(
+    asset_id="Motor-01",
+    contamination=0.05,  # Expect 5% outliers in healthy data
+    n_estimators=100,    # Number of trees in forest
+    random_state=42      # Deterministic training
+)
+
+# Filter to healthy data only
+healthy_data = data[data['operating_state'] == 'RUNNING']
+healthy_data = healthy_data[healthy_data['anomaly_label'] == False]
+
+detector.train(healthy_data)
+```
+
+<Info>
+  **Contamination Parameter**: Set to 5% (0.05) to allow for natural sensor noise in the healthy baseline. This prevents the model from being overly sensitive to minor fluctuations.
+</Info>
+
+## Model Hyperparameters
+
+### Isolation Forest Configuration
+
+```python
+# Default hyperparameters (detector.py:67-70)
+DEFAULT_CONTAMINATION = 0.05  # 5% expected outliers
+DEFAULT_RANDOM_STATE = 42     # Reproducible training
+DEFAULT_N_ESTIMATORS = 100    # Number of trees
+```
+
+| Parameter | Value | Purpose |
+|-----------|-------|----------|
+| `contamination` | 0.05 | Expected proportion of outliers in training data |
+| `n_estimators` | 100 | Number of isolation trees (higher = more stable) |
+| `random_state` | 42 | Seed for reproducibility |
+| `n_jobs` | -1 | Use all CPU cores for parallel training |
+
+### Feature Scaling
+
+All features are standardized using `StandardScaler`:
+
+```python
+from sklearn.preprocessing import StandardScaler
+
+# Fit on healthy baseline (detector.py:226-227)
+self._scaler = StandardScaler()
+features_scaled = self._scaler.fit_transform(feature_matrix)
+
+# Transform during inference
+row_scaled = self._scaler.transform(feature_df)
+```
+
+<Note>
+  **Why Scaling?** Isolation Forest is sensitive to feature magnitudes. Scaling ensures that voltage (230V) doesn't dominate vibration (0.15g) in the anomaly calculation.
+</Note>
+
+## Derived Features (Legacy Model)
+
+The legacy model adds two interaction features:
+
+### 1. Voltage Stability
+
+Measures deviation from Indian Grid nominal voltage:
+
+```python
+NOMINAL_VOLTAGE = 230.0  # Indian Grid standard
+
+voltage_stability = abs(voltage_rolling_mean_1h - NOMINAL_VOLTAGE)
+```
+
+**Example**:
+- Healthy: 230.0V → stability = 0.0
+- Degraded: 225.0V → stability = 5.0
+- Critical: 210.0V → stability = 20.0
+
+### 2. Power-Vibration Ratio
+
+Cross-signal interaction term for detecting mechanical-electrical coupling:
+
+```python
+power_vibration_ratio = vibration_rms / (power_factor + 0.01)
+```
+
+**Interpretation**:
+- **High ratio**: High vibration with low power factor → bearing failure + electrical inefficiency
+- **Low ratio**: Normal vibration with good power factor → healthy operation
+
+<Info>
+  The `+ 0.01` epsilon prevents division by zero when power factor is exactly 0.0 (rare but possible during shutdown).
+</Info>
+
+## Performance Benchmarks
+
+### Model Comparison (Phase 15 Validation)
+
+Tested on 1000-sample dataset with known fault labels:
+
+| Metric | Legacy Model | Batch Model | Improvement |
+|--------|--------------|-------------|-------------|
+| **F1 Score @ 0.5** | 78.1% | **99.6%** | +27.5% |
+| **AUC-ROC** | 1.000 | 1.000 | - |
+| **Jitter Detection** | ❌ 0% | ✅ 100% | +100% |
+| **False Positives** | 12 | 2 | -83% |
+| **False Negatives** | 9 | 2 | -78% |
+
+### Inference Latency
+
+- **Legacy Model**: ~5ms per sample (1 Hz)
+- **Batch Model**: ~15ms per batch (100 samples aggregated)
+- **End-to-end**: ~1 second from sensor → dashboard update
+
+## Dead-Zone Filtering
+
+To prevent "phantom damage" from healthy sensor noise, the system applies a dead-zone:
+
+```python
+# From assessor.py:66
+HEALTHY_FLOOR = 0.65
+
+if batch_score < HEALTHY_FLOOR:
+    effective_severity = 0.0  # Zero damage
+else:
+    # Remap [0.65, 1.0] → [0.0, 1.0]
+    effective_severity = (batch_score - HEALTHY_FLOOR) / (1.0 - HEALTHY_FLOOR)
+```
+
+<Warning>
+  **Why Dead-Zone?** Isolation Forest with `contamination=0.05` produces non-zero scores (0.1-0.5) even on healthy data. Without the dead-zone, the Degradation Index would accumulate damage during normal operation, causing false alarms.
+</Warning>
+
+## Model Persistence
+
+Trained models are saved to disk for reuse:
+
+```python
+# Save model (detector.py:399-434)
+detector.save_model(directory="backend/models")
+# Output: backend/models/detector_Motor-01.joblib
+
+# Load model (detector.py:436-466)
+detector = AnomalyDetector.load_model("backend/models/detector_Motor-01.joblib")
+```
+
+**Saved Metadata**:
+- Asset ID
+- Isolation Forest model
+- StandardScaler parameters
+- Training timestamp
+- Training sample count
+- Calibration threshold (99th percentile)
+- Model version (v2)
+
+## Source Code Reference
+
+Key implementation files:
+
+- **Batch Model**: `backend/ml/batch_detector.py` - 16-D feature Isolation Forest
+- **Legacy Model**: `backend/ml/detector.py:1-467` - 6-D feature model with derived features
+- **Feature Engineering**: `backend/ml/batch_features.py` - Statistical aggregation (mean, std, p2p, RMS)
+- **Baseline Training**: `backend/ml/baseline.py` - Healthy data profiling
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Health Assessment" icon="heart-pulse" href="/features/health-assessment">
+    Learn how anomaly scores are converted to health metrics and risk levels
+  </Card>
+  <Card title="Fault Simulation" icon="flask" href="/features/fault-simulation">
+    Explore fault injection for testing detection capabilities
+  </Card>
+</CardGroup>

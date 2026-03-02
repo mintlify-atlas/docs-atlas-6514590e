@@ -1,0 +1,475 @@
+---
+title: Local Development Setup
+description: Manual installation and setup for backend and frontend development
+---
+
+Set up the Predictive Maintenance System manually for local development without Docker. This approach gives you direct access to source code and dependencies for debugging and feature development.
+
+## Prerequisites
+
+Ensure you have installed:
+- **Python 3.11+** (Backend)
+- **Node.js 18+** and npm (Frontend)
+- **Git**
+- **InfluxDB Cloud account** (or local InfluxDB 2.x)
+
+## Backend Setup
+
+The backend is built with FastAPI and requires a Python virtual environment.
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/BhaveshBytess/PREDICTIVE-MAINTENANCE.git
+    cd PREDICTIVE-MAINTENANCE
+    ```
+  </Step>
+
+  <Step title="Navigate to backend directory">
+    ```bash
+    cd backend
+    ```
+  </Step>
+
+  <Step title="Create virtual environment">
+    Create an isolated Python environment:
+    
+    <CodeGroup>
+    
+    ```bash Windows
+    python -m venv venv
+    .\venv\Scripts\activate
+    ```
+    
+    ```bash Linux/Mac
+    python -m venv venv
+    source venv/bin/activate
+    ```
+    
+    </CodeGroup>
+    
+    <Note>
+    Your terminal prompt should now show `(venv)` indicating the virtual environment is active.
+    </Note>
+  </Step>
+
+  <Step title="Install dependencies">
+    Install all required Python packages:
+    
+    ```bash
+    pip install -r requirements.txt
+    ```
+    
+    This installs:
+    - **FastAPI**: Web framework
+    - **Uvicorn**: ASGI server
+    - **InfluxDB Client**: Time-series database connector
+    - **Scikit-learn**: Machine learning (Isolation Forest)
+    - **Pandas & NumPy**: Data processing
+    - **ReportLab & OpenPyXL**: PDF/Excel report generation
+    - **Pydantic**: Data validation
+  </Step>
+
+  <Step title="Configure environment variables">
+    Create `.env` file from the example:
+    
+    ```bash
+    cp .env.example .env
+    ```
+    
+    Edit `backend/.env` with your InfluxDB credentials:
+    
+    ```env
+    # Environment
+    ENVIRONMENT=local
+    
+    # API Configuration
+    API_V1_STR=/api/v1
+    PROJECT_NAME=Predictive Maintenance
+    
+    # InfluxDB Configuration
+    INFLUX_URL=https://us-east-1-1.aws.cloud2.influxdata.com
+    INFLUX_TOKEN=your-influxdb-token-here
+    INFLUX_ORG=your-organization-id
+    INFLUX_BUCKET=sensor_data
+    ```
+    
+    <Warning>
+    Never commit `.env` files to version control. They contain sensitive credentials.
+    </Warning>
+  </Step>
+
+  <Step title="Start the development server">
+    Run the FastAPI application with hot-reload:
+    
+    ```bash
+    uvicorn backend.api.main:app --reload
+    ```
+    
+    The server will start on **http://localhost:8000**
+    
+    <Note>
+    The `--reload` flag enables auto-restart when code changes are detected. Remove it for production.
+    </Note>
+  </Step>
+
+  <Step title="Verify installation">
+    Test the backend in a new terminal:
+    
+    ```bash
+    curl http://localhost:8000/health
+    ```
+    
+    Expected response:
+    ```json
+    {
+      "status": "healthy",
+      "db_connected": true
+    }
+    ```
+    
+    Or visit the interactive API docs at:
+    - **Swagger UI**: http://localhost:8000/docs
+    - **ReDoc**: http://localhost:8000/redoc
+  </Step>
+</Steps>
+
+## Frontend Setup
+
+The frontend is built with React 18, Vite, and Recharts for real-time visualization.
+
+<Steps>
+  <Step title="Navigate to frontend directory">
+    Open a **new terminal** (keep backend running) and navigate:
+    
+    ```bash
+    cd frontend
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    Install all Node.js packages:
+    
+    ```bash
+    npm install
+    ```
+    
+    This installs:
+    - **React 18**: UI framework
+    - **Vite**: Build tool and dev server
+    - **Recharts**: Real-time charting library
+    - **Axios**: HTTP client
+    - **React Router**: Navigation (if used)
+  </Step>
+
+  <Step title="Configure environment (optional)">
+    Create `.env.local` if you need custom API URL:
+    
+    ```bash
+    cp .env.example .env.local
+    ```
+    
+    Edit `frontend/.env.local`:
+    
+    ```env
+    VITE_API_URL=http://localhost:8000
+    ```
+    
+    <Note>
+    By default, the frontend assumes the backend is at `http://localhost:8000`. Only create this file if using a different URL.
+    </Note>
+  </Step>
+
+  <Step title="Start the development server">
+    Launch the Vite dev server with hot module replacement:
+    
+    ```bash
+    npm run dev
+    ```
+    
+    The frontend will start on **http://localhost:5173**
+  </Step>
+
+  <Step title="Access the dashboard">
+    Open your browser and navigate to:
+    
+    **http://localhost:5173**
+    
+    You should see the Predictive Maintenance dashboard with:
+    - Real-time sensor metrics
+    - Health score visualization
+    - Anomaly detection charts
+    - System control panel
+  </Step>
+</Steps>
+
+## Development Workflow
+
+### Running Both Services
+
+For active development, run both backend and frontend concurrently:
+
+1. **Terminal 1** (Backend):
+   ```bash
+   cd backend
+   source venv/bin/activate  # or .\venv\Scripts\activate on Windows
+   uvicorn backend.api.main:app --reload
+   ```
+
+2. **Terminal 2** (Frontend):
+   ```bash
+   cd frontend
+   npm run dev
+   ```
+
+### Hot Reload Behavior
+
+- **Backend**: Uvicorn automatically restarts when Python files change
+- **Frontend**: Vite hot-reloads React components without full page refresh
+
+### Testing the System
+
+<CodeGroup>
+
+```bash Health Check
+curl http://localhost:8000/health
+```
+
+```bash Start Calibration
+curl -X POST http://localhost:8000/system/calibrate \
+  -H "Content-Type: application/json" \
+  -d '{"asset_id": "Motor-01", "duration_seconds": 60}'
+```
+
+```bash Ingest Sensor Data
+curl -X POST http://localhost:8000/ingest \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event_id": "test-001",
+    "timestamp": "2026-03-02T12:00:00Z",
+    "asset_id": "Motor-01",
+    "sensor_data": {
+      "voltage_v": 230.5,
+      "current_a": 12.3,
+      "power_factor": 0.92,
+      "vibration_g": 0.15
+    }
+  }'
+```
+
+```bash Inject Fault
+curl -X POST http://localhost:8000/system/inject-fault \
+  -H "Content-Type: application/json" \
+  -d '{"asset_id": "Motor-01", "fault_type": "JITTER", "severity": "MEDIUM"}'
+```
+
+</CodeGroup>
+
+## Running Tests
+
+The project includes 182 unit tests covering all major components.
+
+<Steps>
+  <Step title="Install test dependencies">
+    Ensure pytest is installed (included in `requirements.txt`):
+    
+    ```bash
+    pip install pytest pytest-cov
+    ```
+  </Step>
+
+  <Step title="Run all tests">
+    From the project root:
+    
+    ```bash
+    pytest tests/ -v
+    ```
+  </Step>
+
+  <Step title="Run specific test modules">
+    <CodeGroup>
+    
+    ```bash Feature Engineering
+    pytest tests/test_features.py -v
+    ```
+    
+    ```bash Anomaly Detection
+    pytest tests/test_detector.py -v
+    ```
+    
+    ```bash Health Assessment
+    pytest tests/test_assessor.py -v
+    ```
+    
+    ```bash Degradation Index
+    pytest tests/test_degradation.py -v
+    ```
+    
+    ```bash Reports
+    pytest tests/test_reports.py -v
+    ```
+    
+    </CodeGroup>
+  </Step>
+
+  <Step title="Generate coverage report">
+    ```bash
+    pytest tests/ --cov=backend --cov-report=html
+    ```
+    
+    View the report by opening `htmlcov/index.html` in your browser.
+  </Step>
+</Steps>
+
+## Data Generation for Testing
+
+Use the built-in data generator to simulate sensor readings:
+
+<CodeGroup>
+
+```bash Generate Healthy Data
+python scripts/generate_data.py \
+  --asset-id Motor-01 \
+  --mode healthy \
+  --duration 60 \
+  --frequency 100
+```
+
+```bash Generate Faulty Data (JITTER)
+python scripts/generate_data.py \
+  --asset-id Motor-01 \
+  --mode faulty \
+  --fault-type JITTER \
+  --severity MEDIUM \
+  --duration 120
+```
+
+```bash Run End-to-End Demo
+python scripts/demo_pipeline.py
+```
+
+</CodeGroup>
+
+## Troubleshooting
+
+### Backend Issues
+
+#### ModuleNotFoundError: No module named 'backend'
+
+**Solution**: Ensure `PYTHONPATH` includes the project root:
+
+```bash
+export PYTHONPATH="${PYTHONPATH}:/path/to/PREDICTIVE-MAINTENANCE"
+```
+
+Or run from the project root:
+
+```bash
+cd PREDICTIVE-MAINTENANCE
+uvicorn backend.api.main:app --reload
+```
+
+#### InfluxDB Connection Failed
+
+**Solution**: Verify credentials in `backend/.env`:
+
+```bash
+grep INFLUX backend/.env
+```
+
+Test connection:
+
+```python
+from backend.database import get_database_client
+client = get_database_client()
+print(client.health())
+```
+
+#### Port 8000 Already in Use
+
+**Solution**: Kill the existing process:
+
+<CodeGroup>
+
+```bash Linux/Mac
+lsof -ti:8000 | xargs kill -9
+```
+
+```bash Windows
+netstat -ano | findstr :8000
+taskkill /PID <PID> /F
+```
+
+</CodeGroup>
+
+Or use a different port:
+
+```bash
+uvicorn backend.api.main:app --reload --port 8001
+```
+
+### Frontend Issues
+
+#### API Connection Error
+
+**Problem**: `Network Error` in browser console
+
+**Solution**: Verify backend is running:
+
+```bash
+curl http://localhost:8000/health
+```
+
+Check CORS configuration in `backend/api/main.py`:
+
+```python
+CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+]
+```
+
+#### npm install Fails
+
+**Problem**: Package installation errors
+
+**Solution**: Clear cache and reinstall:
+
+```bash
+rm -rf node_modules package-lock.json
+npm cache clean --force
+npm install
+```
+
+#### Port 5173 Already in Use
+
+**Solution**: Vite will automatically try the next available port (5174, 5175, etc.). Or specify a port:
+
+```bash
+npm run dev -- --port 3000
+```
+
+### Windows-Specific Issues
+
+#### Python Virtual Environment Won't Activate
+
+**Problem**: PowerShell execution policy error
+
+**Solution**: Allow script execution:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+Then activate:
+
+```powershell
+.\venv\Scripts\activate
+```
+
+## Next Steps
+
+- Explore [Docker Deployment](/deployment/docker) for containerized development
+- Learn about [Production Deployment](/deployment/production) for cloud hosting
+- Review the [Architecture](/architecture) to understand system components
+- Check the [API Reference](/api/authentication) for integration details

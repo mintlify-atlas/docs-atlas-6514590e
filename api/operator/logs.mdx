@@ -1,0 +1,140 @@
+---
+title: "GET /api/logs"
+description: "Retrieve maintenance logs for dashboard visualization and correlation analysis"
+---
+
+## Endpoint
+
+```
+GET /api/logs
+```
+
+Retrieve maintenance logs from InfluxDB for chart overlay and correlation with sensor data.
+
+## Query Parameters
+
+<ParamField query="hours" type="integer" default="24">
+  Look back period in hours. Defaults to 24 hours.
+</ParamField>
+
+<ParamField query="limit" type="integer" default="50">
+  Maximum number of records to return. Defaults to 50.
+</ParamField>
+
+<ParamField query="asset_id" type="string" optional>
+  Filter logs by specific asset identifier (e.g., "Motor-01"). If not provided, returns logs for all assets.
+</ParamField>
+
+## Response
+
+<ResponseField name="logs" type="array">
+  Array of maintenance log entries
+  
+  <ResponseField name="timestamp" type="datetime">
+    Timestamp of the maintenance event (UTC)
+  </ResponseField>
+  
+  <ResponseField name="asset_id" type="string">
+    Asset identifier (e.g., "Motor-01")
+  </ResponseField>
+  
+  <ResponseField name="event_type" type="string">
+    Type of maintenance event. Allowed values:
+    - `PREVENTIVE_LUBRICATION`
+    - `PREVENTIVE_CLEANING`
+    - `PREVENTIVE_INSPECTION`
+    - `CORRECTIVE_BEARING_REPLACEMENT`
+    - `CORRECTIVE_ALIGNMENT`
+    - `CORRECTIVE_ELECTRICAL`
+    - `STATUS_CALIBRATION`
+    - `STATUS_RESTART`
+  </ResponseField>
+  
+  <ResponseField name="severity" type="string">
+    Event severity level: `LOW`, `MEDIUM`, `HIGH`, or `CRITICAL`
+  </ResponseField>
+  
+  <ResponseField name="description" type="string">
+    Human-readable description of the maintenance activity
+  </ResponseField>
+  
+  <ResponseField name="event_id" type="string" optional>
+    Unique identifier for this log entry (UUID v4)
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="count" type="integer">
+  Total number of logs returned in the response
+</ResponseField>
+
+<ResponseField name="query_params" type="object">
+  Echo of the query parameters used
+  
+  <ResponseField name="hours" type="integer">
+    Look back period used
+  </ResponseField>
+  
+  <ResponseField name="limit" type="integer">
+    Limit applied
+  </ResponseField>
+  
+  <ResponseField name="asset_id" type="string" optional>
+    Asset filter applied (if any)
+  </ResponseField>
+</ResponseField>
+
+## Use Cases
+
+- **Chart Overlay**: Display maintenance events on sensor charts to visualize correlation between maintenance activities and sensor readings
+- **Anomaly Correlation**: Correlate sensor anomalies with maintenance activities to understand cause and effect
+- **Audit Trail**: Review operator-logged events for compliance and documentation purposes
+- **ML Training**: Retrieve ground-truth labels for supervised machine learning model training
+
+## Example Request
+
+```bash
+curl -X GET "http://localhost:8000/api/logs?hours=48&limit=100&asset_id=Motor-01"
+```
+
+## Example Response
+
+```json
+{
+  "logs": [
+    {
+      "timestamp": "2026-01-31T10:30:00Z",
+      "asset_id": "Motor-01",
+      "event_type": "CORRECTIVE_BEARING_REPLACEMENT",
+      "severity": "HIGH",
+      "description": "Replaced main bearing due to excessive vibration. Part #SKF-6205-2RS.",
+      "event_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "timestamp": "2026-01-30T14:15:00Z",
+      "asset_id": "Motor-01",
+      "event_type": "PREVENTIVE_LUBRICATION",
+      "severity": "LOW",
+      "description": "Applied lithium grease to bearing housing per maintenance schedule.",
+      "event_id": "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e"
+    }
+  ],
+  "count": 2,
+  "query_params": {
+    "hours": 48,
+    "limit": 100,
+    "asset_id": "Motor-01"
+  }
+}
+```
+
+## Error Responses
+
+### 500 Internal Server Error
+
+Returned when the database query fails or an unexpected error occurs.
+
+```json
+{
+  "detail": "Failed to retrieve logs: connection timeout"
+}
+```

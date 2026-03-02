@@ -1,0 +1,309 @@
+---
+title: 'POST /sandbox/predict'
+description: 'Run What-If analysis on manual sensor inputs to simulate fault scenarios'
+---
+
+## Overview
+
+The What-If Analysis endpoint allows you to test hypothetical sensor scenarios without affecting the production system. Input manual sensor values to see predicted health scores, risk levels, and detailed feature contributions.
+
+<Note>
+This is a **read-only simulation** endpoint. It does not affect production data, trigger alerts, or modify system state. Use it to explore "what-if" scenarios and validate risk thresholds.
+</Note>
+
+## Endpoint
+
+```
+POST /sandbox/predict
+```
+
+## Request Body
+
+<ParamField body="voltage_v" type="number" required>
+  Voltage in Volts. Must be between 150V and 300V.
+  
+  **Example:** `230.0` (Indian Grid nominal)
+</ParamField>
+
+<ParamField body="current_a" type="number" required>
+  Current in Amperes. Must be between 1A and 50A.
+  
+  **Example:** `15.0` (normal operating current)
+</ParamField>
+
+<ParamField body="power_factor" type="number" required>
+  Power Factor (dimensionless). Must be between 0.3 and 1.0.
+  
+  **Example:** `0.92` (good efficiency)
+</ParamField>
+
+<ParamField body="vibration_g" type="number" required>
+  Vibration in g-force. Must be between 0.01g and 10.0g.
+  
+  **Example:** `0.15` (normal vibration level)
+</ParamField>
+
+<ParamField body="asset_id" type="string" default="asset-001">
+  Asset identifier to compare against. If this asset has live data, the response will include comparison metrics.
+  
+  **Example:** `"asset-001"`
+</ParamField>
+
+## Response
+
+<ResponseField name="anomaly_score" type="number">
+  Anomaly confidence score between 0 and 1. Higher values indicate more anomalous behavior.
+  
+  **Example:** `0.345`
+</ResponseField>
+
+<ResponseField name="health_score" type="number">
+  Overall health score from 0 to 100. Derived from `100 × (1 - anomaly_score)`.
+  
+  **Example:** `65`
+</ResponseField>
+
+<ResponseField name="risk_level" type="string">
+  Risk classification based on health score:
+  - **LOW:** health_score ≥ 75
+  - **MODERATE:** health_score ≥ 50
+  - **HIGH:** health_score ≥ 25
+  - **CRITICAL:** health_score < 25
+  
+  **Example:** `"MODERATE"`
+</ResponseField>
+
+<ResponseField name="feature_contributions" type="array">
+  Array of feature contributions explaining which sensor values contributed most to the anomaly score.
+  
+  <Expandable title="FeatureContribution object">
+    <ResponseField name="feature" type="string">
+      Human-readable feature name (e.g., "Voltage", "Vibration", "Power Factor")
+    </ResponseField>
+    
+    <ResponseField name="value" type="number">
+      The computed value for this feature
+    </ResponseField>
+    
+    <ResponseField name="contribution_percent" type="number">
+      Percentage contribution to the total anomaly score (0-100)
+    </ResponseField>
+    
+    <ResponseField name="deviation_from_normal" type="number">
+      Standard deviations from normal baseline (z-score)
+    </ResponseField>
+    
+    <ResponseField name="status" type="string">
+      Feature status: `"normal"` (deviation < 1.0), `"elevated"` (deviation < 2.5), or `"critical"` (deviation ≥ 2.5)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="insight" type="string">
+  Human-readable explanation of the prediction based on top contributing factors.
+  
+  **Example:** `"Vibration (2.50g) is significantly elevated. Current draw (35.0A) indicates potential overload."`
+</ResponseField>
+
+<ResponseField name="comparison" type="object" nullable>
+  Comparison with live system state (only present if asset has recent data).
+  
+  <Expandable title="LiveComparison object">
+    <ResponseField name="live_voltage" type="number" nullable>
+      Current live voltage reading for this asset
+    </ResponseField>
+    
+    <ResponseField name="live_current" type="number" nullable>
+      Current live current reading for this asset
+    </ResponseField>
+    
+    <ResponseField name="live_power_factor" type="number" nullable>
+      Current live power factor reading for this asset
+    </ResponseField>
+    
+    <ResponseField name="live_vibration" type="number" nullable>
+      Current live vibration reading for this asset
+    </ResponseField>
+    
+    <ResponseField name="voltage_diff_percent" type="number" nullable>
+      Percentage difference between manual input and live voltage
+    </ResponseField>
+    
+    <ResponseField name="current_diff_percent" type="number" nullable>
+      Percentage difference between manual input and live current
+    </ResponseField>
+    
+    <ResponseField name="power_factor_diff_percent" type="number" nullable>
+      Percentage difference between manual input and live power factor
+    </ResponseField>
+    
+    <ResponseField name="vibration_diff_percent" type="number" nullable>
+      Percentage difference between manual input and live vibration
+    </ResponseField>
+    
+    <ResponseField name="live_health_score" type="number" nullable>
+      Current live health score for this asset
+    </ResponseField>
+    
+    <ResponseField name="live_risk_level" type="string" nullable>
+      Current live risk level for this asset
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example Request
+
+```bash
+curl -X POST https://api.example.com/sandbox/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "voltage_v": 210.0,
+    "current_a": 35.0,
+    "power_factor": 0.55,
+    "vibration_g": 2.5,
+    "asset_id": "asset-001"
+  }'
+```
+
+## Example Response
+
+```json
+{
+  "anomaly_score": 0.782,
+  "health_score": 22,
+  "risk_level": "CRITICAL",
+  "feature_contributions": [
+    {
+      "feature": "Vibration",
+      "value": 2.5,
+      "contribution_percent": 38.4,
+      "deviation_from_normal": 4.12,
+      "status": "critical"
+    },
+    {
+      "feature": "Power Factor",
+      "value": 0.55,
+      "contribution_percent": 28.7,
+      "deviation_from_normal": 3.45,
+      "status": "critical"
+    },
+    {
+      "feature": "Current Spikes",
+      "value": 10,
+      "contribution_percent": 19.2,
+      "deviation_from_normal": 2.78,
+      "status": "critical"
+    },
+    {
+      "feature": "Voltage Stability",
+      "value": 20.0,
+      "contribution_percent": 8.9,
+      "deviation_from_normal": 1.23,
+      "status": "elevated"
+    },
+    {
+      "feature": "Voltage",
+      "value": 210.0,
+      "contribution_percent": 3.1,
+      "deviation_from_normal": 0.87,
+      "status": "normal"
+    },
+    {
+      "feature": "Power/Vibration Ratio",
+      "value": 4.545,
+      "contribution_percent": 1.7,
+      "deviation_from_normal": 0.45,
+      "status": "normal"
+    }
+  ],
+  "insight": "Vibration (2.50g) is significantly elevated. Current draw (35.0A) indicates potential overload.",
+  "comparison": {
+    "live_voltage": 228.0,
+    "live_current": 15.2,
+    "live_power_factor": 0.91,
+    "live_vibration": 0.16,
+    "voltage_diff_percent": -7.9,
+    "current_diff_percent": 130.3,
+    "power_factor_diff_percent": -39.6,
+    "vibration_diff_percent": 1462.5,
+    "live_health_score": 87,
+    "live_risk_level": "LOW"
+  }
+}
+```
+
+## Use Cases
+
+### Testing Fault Scenarios
+
+Simulate known fault conditions (motor stall, bearing failure, voltage spike) to validate that the ML model correctly identifies them:
+
+```bash
+# Motor Stall Scenario
+curl -X POST https://api.example.com/sandbox/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "voltage_v": 210.0,
+    "current_a": 35.0,
+    "power_factor": 0.55,
+    "vibration_g": 2.5,
+    "asset_id": "asset-001"
+  }'
+```
+
+### Validating Thresholds
+
+Test edge cases to determine at what point the system transitions between risk levels:
+
+```bash
+# Test moderate vibration
+curl -X POST https://api.example.com/sandbox/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "voltage_v": 228.0,
+    "current_a": 16.0,
+    "power_factor": 0.88,
+    "vibration_g": 1.5,
+    "asset_id": "asset-001"
+  }'
+```
+
+### Comparing to Live State
+
+When providing an `asset_id` with live data, the response includes comparison metrics showing how your hypothetical scenario differs from current reality.
+
+## Preset Scenarios
+
+Use the `GET /sandbox/presets` endpoint to retrieve pre-configured fault scenarios:
+- **Normal:** Healthy operating conditions
+- **Motor Stall:** High current draw with poor power factor
+- **Voltage Spike:** Grid voltage spike
+- **Bearing Failure:** Excessive vibration
+
+## Error Responses
+
+### 400 Bad Request - No Trained Detector
+
+```json
+{
+  "detail": "No trained detector for asset 'asset-001'. Please calibrate the system first."
+}
+```
+
+The system requires calibration with baseline data before running What-If analysis. Ensure the asset has been trained via the `/integration/calibrate` endpoint.
+
+### 422 Unprocessable Entity - Validation Error
+
+```json
+{
+  "detail": [
+    {
+      "loc": ["body", "voltage_v"],
+      "msg": "Input should be greater than or equal to 150",
+      "type": "greater_than_equal"
+    }
+  ]
+}
+```
+
+Sensor values must be within the allowed ranges specified in the request parameters.

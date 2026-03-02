@@ -1,0 +1,202 @@
+---
+title: Industrial Health Certificate
+description: Generate 5-page Industrial Asset Health Certificate with ML explainability and maintenance correlation analysis
+---
+
+## GET /api/v1/report/{asset_id}?format=industrial
+
+Generate a comprehensive 5-page Industrial Asset Health Certificate for engineers and maintenance teams. This is the recommended report format for technical audiences.
+
+### Path Parameters
+
+<ParamField path="asset_id" type="string" required>
+  Asset identifier (e.g., `Motor-01`)
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="format" type="string" required>
+  Must be `industrial`
+</ParamField>
+
+### Response
+
+Returns a professional PDF file with:
+
+- **5 pages** of detailed technical analysis
+- **ML explainability** with feature contribution breakdown
+- **Maintenance correlation** with operator log events
+- **Sensor trend charts** with anomaly annotations
+- **Audit trail** with model version and data provenance
+
+### Example
+
+```bash cURL
+curl -X GET "https://predictive-maintenance-uhlb.onrender.com/api/v1/report/Motor-01?format=industrial" \
+  -H "Accept: application/pdf" \
+  --output motor01-industrial-cert.pdf
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    "https://predictive-maintenance-uhlb.onrender.com/api/v1/report/Motor-01",
+    params={"format": "industrial"}
+)
+
+with open("motor01-industrial-cert.pdf", "wb") as f:
+    f.write(response.content)
+```
+
+### File Naming
+
+Downloaded files follow the pattern:
+```
+industrial-health-cert_{asset_id}_{timestamp}.pdf
+```
+
+Example: `industrial-health-cert_Motor-01_2026-03-02T10-30-00Z.pdf`
+
+## Report Structure
+
+### Page 1: Executive Summary
+
+- **Header**: Company branding, asset ID, report date
+- **Health Status Card**: Grade (A-F), Score (0-100), Risk Level badge
+- **Key Metrics Grid**:
+  - Degradation Index (DI) with progress bar
+  - Remaining Useful Life (RUL) in hours
+  - Damage Rate (per hour)
+  - Anomaly Detection Statistics
+- **Recommendation**: Maintenance action required (if any)
+
+### Page 2: Current Sensor Readings
+
+- **Real-time measurements** at report generation time:
+  - Voltage (V)
+  - Current (A)
+  - Power Factor
+  - Vibration (g)
+  - Computed Power (kW)
+- **Baseline comparison**: Current vs. Target ranges
+- **Deviation analysis**: Percentage difference from baseline
+
+### Page 3: ML Explainability
+
+<Note>
+  This page provides transparency into the ML model's decision-making process.
+</Note>
+
+- **Feature Contribution Breakdown**:
+  - Batch model features (16-D: mean, std, peak-to-peak, rms for each signal)
+  - Legacy model features (6-D: rolling means, spike counts, etc.)
+  - Contribution scores showing which features triggered anomaly detection
+- **Detection Logic**:
+  - Anomaly score calculation method
+  - Dead-zone threshold (HEALTHY_FLOOR = 0.65)
+  - Sensitivity constant (0.005)
+- **Model Metadata**:
+  - Model version (v2 Legacy, v3 Batch)
+  - Training date
+  - Baseline ID
+
+### Page 4: Maintenance Correlation Analysis
+
+- **Operator Log Events**: Recent maintenance activities from the last 24 hours
+- **Correlation Matrix**: Time-based correlation between:
+  - Operator log timestamps
+  - Anomaly detection events
+  - Health score degradation
+- **Causal Analysis**: Identifies whether maintenance events:
+  - Preceded anomalies (predictive)
+  - Followed anomalies (reactive)
+  - Improved health scores (effective)
+
+<Info>
+  This analysis helps validate that maintenance activities are having the intended effect on asset health.
+</Info>
+
+### Page 5: Sensor Trend Charts & Audit Trail
+
+- **Time-Series Charts** (last 60 seconds):
+  - Voltage trend with baseline range overlay
+  - Current trend with spike annotations
+  - Vibration trend with anomaly markers
+  - Health score timeline with risk level transitions
+- **Audit Trail**:
+  - Report generation timestamp
+  - Data source (InfluxDB bucket)
+  - ML model versions
+  - Operator who requested the report (if authenticated)
+  - Hash of sensor data (for tamper detection)
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Root Cause Analysis" icon="magnifying-glass-chart">
+    Investigate why anomalies occurred
+  </Card>
+  <Card title="Maintenance Planning" icon="calendar-days">
+    Schedule preventive maintenance based on RUL
+  </Card>
+  <Card title="Regulatory Compliance" icon="file-contract">
+    Provide auditable evidence of asset monitoring
+  </Card>
+  <Card title="Insurance Claims" icon="shield-halved">
+    Document asset condition at time of failure
+  </Card>
+</CardGroup>
+
+## The Snapshot Rule
+
+<Warning>
+  **All reports use the Snapshot Rule**: Sensor data and health metrics are captured at the moment of report generation. This ensures reports are immutable and auditable.
+</Warning>
+
+The Industrial Certificate includes a cryptographic hash of the sensor data to prevent tampering. This makes it suitable for:
+
+- Regulatory audits (FDA, ISO 55000)
+- Insurance claims
+- Legal proceedings
+- Safety investigations
+
+### Status Codes
+
+- `200` - Certificate generated successfully
+- `404` - Asset not found or no health data available
+- `503` - PDF generation failed
+
+### Performance
+
+- **Generation Time**: 2-5 seconds (includes chart rendering)
+- **File Size**: ~500 KB (depends on chart complexity)
+- **Charts**: Rendered server-side using ReportLab
+
+<Tip>
+  Generate Industrial Certificates weekly for high-value assets, or on-demand when anomalies are detected. Store certificates in a document management system for historical comparison.
+</Tip>
+
+## Comparison with Other Reports
+
+| Feature | Executive PDF | Analyst Excel | **Industrial PDF** |
+|---------|--------------|---------------|-------------------|
+| **Pages** | 1 | 3 sheets | **5** |
+| **Audience** | Executives | Data Analysts | **Engineers** |
+| **ML Explainability** | ❌ No | ❌ No | **✅ Yes** |
+| **Sensor Charts** | ❌ No | ❌ No | **✅ Yes** |
+| **Operator Logs** | ❌ No | ✅ Yes | **✅ Yes** |
+| **Maintenance Correlation** | ❌ No | ❌ No | **✅ Yes** |
+| **Audit Trail** | ❌ No | ❌ No | **✅ Yes** |
+| **Generation Time** | {"<"}1s | ~2s | **2-5s** |
+
+### Related Endpoints
+
+<CardGroup cols={2}>
+  <Card title="Executive PDF" icon="file-pdf" href="/api/reports/executive-pdf">
+    1-page summary for quick review
+  </Card>
+  <Card title="Analyst Excel" icon="file-excel" href="/api/reports/analyst-excel">
+    Raw data for statistical analysis
+  </Card>
+</CardGroup>

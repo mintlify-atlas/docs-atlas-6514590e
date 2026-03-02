@@ -1,0 +1,535 @@
+---
+title: "Production Monitoring"
+description: "How to monitor the system in production - health checks, logs, metrics, and deployment status"
+icon: "display"
+---
+
+## Overview
+
+Monitoring the Predictive Maintenance System ensures reliable anomaly detection and early identification of infrastructure issues. This guide covers health checks, log watching, performance metrics, and cloud deployment monitoring.
+
+---
+
+## Health Checks
+
+### Backend Health Endpoint
+
+The `/health` endpoint provides a quick system status check:
+
+```bash
+curl http://localhost:8000/health
+```
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "db_connected": true,
+  "timestamp": "2026-03-02T14:30:00Z"
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `status` | `healthy` or `degraded` |
+| `db_connected` | InfluxDB connection status |
+| `timestamp` | Server time (UTC) |
+
+<Tip>
+  Use this endpoint for **uptime monitoring** tools like UptimeRobot, Pingdom, or Datadog.
+</Tip>
+
+### Keep-Alive Ping
+
+The `/ping` endpoint is a lightweight health check (no database queries):
+
+```bash
+curl http://localhost:8000/ping
+```
+
+**Response:**
+```json
+{
+  "status": "ok"
+}
+```
+
+<Note>
+  The frontend sends a **10-minute heartbeat** to `/ping` to prevent Render free-tier cold starts (see [Render Deployment](#render-deployment-status) below).
+</Note>
+
+---
+
+## System State Monitoring
+
+### Check Current State
+
+The `/system/state` endpoint shows operational mode:
+
+```bash
+curl http://localhost:8000/system/state
+```
+
+**Response:**
+```json
+{
+  "state": "MONITORING",
+  "asset_id": "Motor-01",
+  "monitoring_start_time": "2026-03-02T14:00:00Z",
+  "calibration_status": "complete",
+  "baseline_sample_count": 500,
+  "model_version": "v3"
+}
+```
+
+### System States
+
+<AccordionGroup>
+  <Accordion title="IDLE" icon="circle">
+    No active monitoring. System waiting for calibration or data ingestion.
+    
+    **Action:** Start calibration or monitoring.
+  </Accordion>
+  
+  <Accordion title="CALIBRATING" icon="rotate">
+    Collecting healthy baseline data. Models not yet trained.
+    
+    **Action:** Wait for calibration to complete (typically 5-10 minutes).
+  </Accordion>
+  
+  <Accordion title="MONITORING" icon="eye">
+    Active anomaly detection. Models trained and scoring incoming data.
+    
+    **Action:** Normal operations. Monitor health scores.
+  </Accordion>
+  
+  <Accordion title="FAULT_INJECTED" icon="triangle-exclamation">
+    Fault simulation active. Anomalies are intentional.
+    
+    **Action:** Demo/testing mode. Clear fault to resume normal monitoring.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Log Watching
+
+### Backend Logs
+
+<Tabs>
+  <Tab title="Docker">
+    ```bash
+    # View live logs
+    docker-compose logs -f backend
+    
+    # Last 100 lines
+    docker-compose logs --tail=100 backend
+    
+    # Specific timestamp range
+    docker-compose logs --since="2026-03-02T14:00:00" backend
+    ```
+  </Tab>
+  
+  <Tab title="Systemd (Linux)">
+    ```bash
+    # View live logs
+    sudo journalctl -u predictive-maintenance -f
+    
+    # Last 100 lines
+    sudo journalctl -u predictive-maintenance -n 100
+    
+    # Today's logs
+    sudo journalctl -u predictive-maintenance --since today
+    ```
+  </Tab>
+  
+  <Tab title="Render (Cloud)">
+    1. Open [Render Dashboard](https://dashboard.render.com)
+    2. Select your backend service
+    3. Click **Logs** tab
+    4. Live tail is enabled by default
+  </Tab>
+</Tabs>
+
+### Key Log Patterns
+
+<AccordionGroup>
+  <Accordion title="[Calibration] Baseline built successfully" icon="check">
+    **Meaning:** Model training completed.
+    
+    **Log Example:**
+    ```
+    [Calibration] Baseline built successfully for Motor-01: 500 samples
+    [Calibration] Batch detector trained on 480 windows (16 features)
+    ```
+    
+    **Action:** System ready for monitoring.
+  </Accordion>
+  
+  <Accordion title="[Health] Health score: X (RISK_LEVEL)" icon="heart">
+    **Meaning:** Periodic health assessment logged.
+    
+    **Log Example:**
+    ```
+    [Health] Health score: 42 (HIGH) - Vibration variance elevated
+    ```
+    
+    **Action:** If risk is HIGH or CRITICAL, investigate explanations.
+  </Accordion>
+  
+  <Accordion title="ERROR fetching data" icon="circle-exclamation">
+    **Meaning:** InfluxDB query failed.
+    
+    **Log Example:**
+    ```
+    [Retrain] ERROR fetching data: unauthorized access
+    ```
+    
+    **Action:** Check InfluxDB credentials and network connectivity (see [Troubleshooting](/guides/troubleshooting#influxdb-connection-failures)).
+  </Accordion>
+  
+  <Accordion title="Model loaded from backend/models/..." icon="box">
+    **Meaning:** Pre-trained model restored on startup.
+    
+    **Log Example:**
+    ```
+    [Detector] Model loaded from backend/models/Motor-01_batch_detector_v3.pkl
+    ```
+    
+    **Action:** Normal. Model persists across restarts.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Performance Metrics
+
+### Real-Time Metrics Dashboard
+
+The frontend **Dashboard** tab displays live performance indicators:
+
+<CardGroup cols={2}>
+  <Card title="Health Score" icon="heart-pulse">
+    0-100 scale derived from Degradation Index (DI)
+  </Card>
+  
+  <Card title="Anomaly Score" icon="chart-line">
+    0.0-1.0 probability from Isolation Forest
+  </Card>
+  
+  <Card title="Damage Rate" icon="fire">
+    DI increase per hour (% degradation/hour)
+  </Card>
+  
+  <Card title="RUL (Remaining Useful Life)" icon="clock">
+    Projected hours until maintenance required
+  </Card>
+</CardGroup>
+
+### Historical Metrics Query
+
+Retrieve time-series metrics via API:
+
+```bash
+curl -X GET "http://localhost:8000/integration/sensor-history?asset_id=Motor-01&seconds=3600" \
+  | jq '.[] | {timestamp, health_score, anomaly_score}'
+```
+
+**Response:**
+```json
+[
+  {
+    "timestamp": "2026-03-02T14:00:00Z",
+    "health_score": 95,
+    "anomaly_score": 0.08
+  },
+  {
+    "timestamp": "2026-03-02T14:01:00Z",
+    "health_score": 93,
+    "anomaly_score": 0.12
+  }
+]
+```
+
+### Baseline Metrics
+
+Check calibrated baseline targets:
+
+```bash
+curl http://localhost:8000/integration/health-status?asset_id=Motor-01 \
+  | jq '.baseline_targets'
+```
+
+**Response:**
+```json
+{
+  "voltage_v": 230.0,
+  "current_a": 15.0,
+  "power_factor": 0.92,
+  "vibration_g": 0.15
+}
+```
+
+<Tip>
+  These values are displayed on the frontend **Status Cards** for instant comparison with live readings.
+</Tip>
+
+---
+
+## Deployment Status Monitoring
+
+### Render (Backend) Deployment Status
+
+The system is deployed on **Render Free Tier**, which has specific monitoring considerations:
+
+#### Cold Start Behavior
+
+<Warning>
+  Render free-tier services **spin down after 15 minutes** of inactivity. The first request after spin-down takes 30-60 seconds to respond.
+</Warning>
+
+**Cold Start Detection:**
+- Frontend shows **STATUS: OFFLINE** badge
+- First API request returns HTTP 503 or timeout
+- Render logs show: `Starting service...`
+
+**Cold Start Mitigation:**
+
+The frontend automatically sends a keep-alive heartbeat:
+
+```javascript
+// Keep-alive ping every 10 minutes
+setInterval(() => {
+  fetch(`${API_URL}/ping`).catch(() => {});
+}, 10 * 60 * 1000);
+```
+
+<Tip>
+  For production deployments, upgrade to **Render Starter** ($7/month) to eliminate cold starts.
+</Tip>
+
+#### Monitoring Render Health
+
+1. **Via Dashboard:**
+   - Open [Render Dashboard](https://dashboard.render.com)
+   - Check service status (green = running, gray = spun down)
+   - Review **Events** tab for deploy/restart logs
+
+2. **Via API:**
+   ```bash
+   curl -H "Authorization: Bearer $RENDER_API_KEY" \
+     https://api.render.com/v1/services/$SERVICE_ID
+   ```
+
+3. **Via Application:**
+   - Frontend **STATUS: LIVE** badge (green = healthy, red = offline)
+   - Check `/health` endpoint response time ({"<"}500ms = warm, >2s = cold start)
+
+---
+
+### Vercel (Frontend) Deployment Status
+
+The frontend is deployed on **Vercel Free Tier**.
+
+#### Monitoring Vercel Health
+
+1. **Via Dashboard:**
+   - Open [Vercel Dashboard](https://vercel.com/dashboard)
+   - Check **Deployments** tab for build status
+   - Review **Analytics** for traffic and error rates
+
+2. **Via Application:**
+   - Open [https://predictive-maintenance-ten.vercel.app/](https://predictive-maintenance-ten.vercel.app/)
+   - Check browser console for errors
+   - Verify **STATUS: LIVE** badge appears within 5 seconds
+
+<Note>
+  Vercel Edge Network has **no cold starts**. The frontend loads instantly worldwide.
+</Note>
+
+---
+
+### InfluxDB Cloud Status
+
+Monitor InfluxDB connectivity:
+
+```bash
+curl -X GET "$INFLUX_URL/health" \
+  -H "Authorization: Token $INFLUX_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "name": "influxdb",
+  "message": "ready for queries and writes",
+  "status": "pass",
+  "checks": [],
+  "version": "v2.7.1",
+  "commit": "..."
+}
+```
+
+<AccordionGroup>
+  <Accordion title="status: pass" icon="check">
+    InfluxDB is healthy and accepting requests.
+  </Accordion>
+  
+  <Accordion title="status: fail" icon="xmark">
+    Database is down. Check [InfluxDB Status Page](https://status.influxdata.com).
+  </Accordion>
+  
+  <Accordion title="401 Unauthorized" icon="lock">
+    Invalid token. Verify `INFLUX_TOKEN` environment variable.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Alerting and Notifications
+
+### Event Webhook Integration
+
+The `/integration/events` endpoint streams state transitions:
+
+```bash
+curl -X GET "http://localhost:8000/integration/events?asset_id=Motor-01&limit=10"
+```
+
+**Response:**
+```json
+[
+  {
+    "event_type": "ANOMALY_DETECTED",
+    "timestamp": "2026-03-02T14:30:00Z",
+    "asset_id": "Motor-01",
+    "message": "High vibration variance (mechanical jitter): σ=0.17g",
+    "severity": "HIGH",
+    "health_score": 42
+  }
+]
+```
+
+### Setting Up Alerts
+
+<Steps>
+  <Step title="Choose a Notification Service">
+    Options: Slack, PagerDuty, email (via SendGrid), SMS (via Twilio)
+  </Step>
+  
+  <Step title="Poll Events Endpoint">
+    Set up a cron job or serverless function to check for new events:
+    
+    ```python
+    import requests
+    
+    response = requests.get(
+        "http://your-backend.com/integration/events",
+        params={"asset_id": "Motor-01", "limit": 5}
+    )
+    
+    for event in response.json():
+        if event["severity"] in ["HIGH", "CRITICAL"]:
+            send_alert(event)  # Your notification logic
+    ```
+  </Step>
+  
+  <Step title="Filter by Severity">
+    Only alert on actionable events:
+    - **CRITICAL:** Immediate action required (health < 25)
+    - **HIGH:** Schedule maintenance within 24-48 hours (health < 50)
+    - **MODERATE:** Monitor closely (health < 75)
+  </Step>
+</Steps>
+
+<Tip>
+  For production, consider using **InfluxDB alerting rules** to trigger notifications directly from the time-series database.
+</Tip>
+
+---
+
+## Performance Benchmarks
+
+### Expected Response Times
+
+| Endpoint | Cold Start | Warm |
+|----------|------------|------|
+| `/ping` | {"<"}100ms | {"<"}50ms |
+| `/health` | {"<"}500ms | {"<"}200ms |
+| `/system/state` | {"<"}300ms | {"<"}100ms |
+| `/integration/health-status` | {"<"}800ms | {"<"}400ms |
+| `/integration/sensor-history` | {"<"}2s | {"<"}1s |
+
+<Warning>
+  If response times exceed 2x these values, investigate:
+  - InfluxDB query performance (check for missing indexes)
+  - Render instance CPU/memory limits (check Render metrics)
+  - Network latency (run `ping` to backend domain)
+</Warning>
+
+### Throughput Limits
+
+**Render Free Tier:**
+- 512 MB RAM
+- 0.1 CPU core
+- Limit: ~10 requests/second
+
+**InfluxDB Cloud Free Tier:**
+- 10,000 writes/5 minutes
+- Limit: ~33 writes/second
+
+<Note>
+  At 100Hz ingestion for 1 asset, you send **100 writes/second**. This exceeds the InfluxDB free tier. Use **batch writes** (100 points per API call) to stay within limits.
+</Note>
+
+---
+
+## Monitoring Checklist
+
+<Steps>
+  <Step title="Daily: Check Health Dashboard">
+    - Verify **STATUS: LIVE** badge is green
+    - Scan health scores for all assets
+    - Review recent operator logs
+  </Step>
+  
+  <Step title="Weekly: Review Logs">
+    - Check for InfluxDB connection errors
+    - Verify model loading logs on restarts
+    - Investigate any ERROR or WARNING entries
+  </Step>
+  
+  <Step title="Monthly: Performance Audit">
+    - Run benchmark script to validate model accuracy
+    - Review false positive/negative rates
+    - Check Render/Vercel deployment metrics
+  </Step>
+  
+  <Step title="Quarterly: Model Retraining">
+    - Retrain models with fresh healthy data
+    - Update baselines if operating conditions changed
+    - Document retraining events
+  </Step>
+</Steps>
+
+---
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Troubleshooting" icon="wrench" href="/guides/troubleshooting">
+    Common issues and solutions
+  </Card>
+  
+  <Card title="Model Retraining" icon="brain" href="/guides/model-retraining">
+    How to retrain ML models
+  </Card>
+  
+  <Card title="Health Assessment" icon="heart" href="/features/health-assessment">
+    Understanding health scores
+  </Card>
+  
+  <Card title="API Reference" icon="code" href="/api/health">
+    Complete API documentation
+  </Card>
+</CardGroup>

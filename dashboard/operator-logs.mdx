@@ -1,0 +1,299 @@
+---
+title: 'Operator Logs'
+description: 'Logging maintenance events for ML ground-truth labeling and chart correlation'
+---
+
+The **Operator Input Log** panel allows maintenance personnel to record real-world maintenance events that serve as **ground-truth labels** for supervised machine learning.
+
+## Purpose
+
+Operator logs create a bridge between **sensor anomalies** and **actual maintenance activities**, enabling:
+
+- **Supervised ML Training:** Correlate sensor patterns with known failure modes
+- **Audit Trail:** Document maintenance history for compliance and analysis
+- **Chart Overlay:** Visualize maintenance events on the sensor telemetry chart
+- **Failure Mode Analysis:** Identify which sensor patterns precede specific failure types
+
+<Info>
+All operator logs are persisted to **InfluxDB** in the `maintenance_logs` measurement within the `sensor_data` bucket.
+</Info>
+
+## Logging a Maintenance Event
+
+The form includes the following fields:
+
+<Steps>
+  <Step title="Asset ID">
+    **Field:** Read-only (pre-filled with `Motor-01`)
+    
+    **Purpose:** Identifies which asset the maintenance was performed on.
+  </Step>
+  
+  <Step title="Event Type">
+    **Field:** Dropdown (required)
+    
+    **Options:**
+    - **Preventive Lubrication** — Scheduled lubrication activity
+    - **Preventive Cleaning** — Scheduled cleaning activity
+    - **Preventive Inspection** — Routine inspection
+    - **Corrective Bearing Replacement** — Bearing replacement due to wear
+    - **Corrective Alignment** — Motor/pump alignment adjustment
+    - **Corrective Electrical** — Electrical system repair
+    - **Status Calibration** — System recalibration event
+    - **Status Restart** — System restart or reboot
+  </Step>
+  
+  <Step title="Severity">
+    **Field:** Dropdown (required)
+    
+    **Options:**
+    - **LOW** — Minor maintenance, no production impact
+    - **MEDIUM** — Moderate issue, scheduled downtime
+    - **HIGH** — Urgent repair, unplanned downtime
+    - **CRITICAL** — Emergency failure, immediate action
+  </Step>
+  
+  <Step title="Description">
+    **Field:** Text area (required, max 1000 characters)
+    
+    **Purpose:** Free-text description of the maintenance activity.
+    
+    **Example:**
+    ```
+    Replaced main bearing due to excessive vibration.
+    Part #SKF-6205-2RS. Vibration reduced from 0.35g to 0.14g post-replacement.
+    ```
+  </Step>
+  
+  <Step title="Event Date & Time">
+    **Field:** Datetime picker (optional)
+    
+    **Purpose:** Allows **backdating** logs for historical events. If left empty, the current timestamp is used.
+    
+    **Use Case:** Log a bearing replacement that occurred 2 days ago to correlate with past sensor spikes.
+  </Step>
+</Steps>
+
+## Example Log Entry
+
+<Card title="Bearing Replacement" icon="wrench">
+  **Asset:** Motor-01  
+  **Type:** Corrective Bearing Replacement  
+  **Severity:** HIGH  
+  **Description:** Replaced main bearing due to excessive vibration. Part #SKF-6205-2RS.  
+  **Timestamp:** 2026-01-31T10:30:00Z
+</Card>
+
+## How Logs Are Stored
+
+When you submit a log entry, it is written to **InfluxDB** with the following schema:
+
+<Tabs>
+  <Tab title="Measurement">
+    **Name:** `maintenance_logs`
+    
+    **Bucket:** `sensor_data` (same as sensor telemetry)
+  </Tab>
+  
+  <Tab title="Tags (Indexed)">
+    - `asset_id` — Asset identifier (e.g., "Motor-01")
+    - `event_type` — Maintenance event classification
+    - `severity` — Severity level (LOW/MEDIUM/HIGH/CRITICAL)
+  </Tab>
+  
+  <Tab title="Fields (Unindexed)">
+    - `description` — Free-text maintenance description
+    - `event_id` — UUID for the log entry
+  </Tab>
+  
+  <Tab title="Timestamp">
+    UTC timestamp of the event (user-provided or auto-generated)
+  </Tab>
+</Tabs>
+
+### InfluxDB Point Example
+
+```flux
+maintenance_logs,asset_id=Motor-01,event_type=CORRECTIVE_BEARING_REPLACEMENT,severity=HIGH 
+description="Replaced main bearing due to excessive vibration. Part #SKF-6205-2RS.",
+event_id="550e8400-e29b-41d4-a716-446655440000" 
+1738322400000000000
+```
+
+## Chart Overlay (Future Enhancement)
+
+Operator logs can be queried and displayed as **vertical markers** on the sensor telemetry chart:
+
+```javascript
+// Fetch logs for the past 24 hours
+GET /api/logs?hours=24&asset_id=Motor-01
+
+// Response:
+{
+  "logs": [
+    {
+      "timestamp": "2026-01-31T10:30:00Z",
+      "event_type": "CORRECTIVE_BEARING_REPLACEMENT",
+      "severity": "HIGH",
+      "description": "Replaced main bearing..."
+    }
+  ],
+  "count": 1
+}
+```
+
+These logs can be overlaid on the chart as **orange diamonds** at the corresponding timestamps, allowing operators to see which maintenance events align with sensor anomalies.
+
+## ML Training Use Case
+
+Operator logs serve as **supervised labels** for training failure prediction models:
+
+### Example: Bearing Failure Prediction
+
+1. **Collect Data:** 6 months of sensor data + operator logs
+2. **Label Events:** Extract all `CORRECTIVE_BEARING_REPLACEMENT` events
+3. **Feature Extraction:** Pull sensor data from 24 hours before each replacement
+4. **Train Classifier:** Learn patterns that precede bearing failures
+5. **Deploy Model:** Predict bearing failures 7-14 days in advance
+
+<Info>
+The `/api/logs` endpoint allows querying logs by time range and asset, making it easy to export data for offline ML training.
+</Info>
+
+## API Reference
+
+### Create Log Entry
+
+```bash
+POST /api/log
+Content-Type: application/json
+
+{
+  "asset_id": "Motor-01",
+  "event_type": "CORRECTIVE_BEARING_REPLACEMENT",
+  "severity": "HIGH",
+  "description": "Replaced main bearing due to excessive vibration. Part #SKF-6205-2RS.",
+  "timestamp": "2026-01-31T10:30:00Z"  // Optional
+}
+```
+
+**Response (201 Created):**
+
+```json
+{
+  "event_id": "550e8400-e29b-41d4-a716-446655440000",
+  "asset_id": "Motor-01",
+  "event_type": "CORRECTIVE_BEARING_REPLACEMENT",
+  "severity": "HIGH",
+  "timestamp": "2026-01-31T10:30:00Z",
+  "message": "Log entry created successfully for Motor-01"
+}
+```
+
+### Retrieve Logs
+
+```bash
+GET /api/logs?hours=24&limit=50&asset_id=Motor-01
+```
+
+**Response:**
+
+```json
+{
+  "logs": [
+    {
+      "timestamp": "2026-01-31T10:30:00Z",
+      "asset_id": "Motor-01",
+      "event_type": "CORRECTIVE_BEARING_REPLACEMENT",
+      "severity": "HIGH",
+      "description": "Replaced main bearing due to excessive vibration. Part #SKF-6205-2RS.",
+      "event_id": "550e8400-e29b-41d4-a716-446655440000"
+    }
+  ],
+  "count": 1,
+  "query_params": {
+    "hours": 24,
+    "limit": 50,
+    "asset_id": "Motor-01"
+  }
+}
+```
+
+### List Event Types
+
+```bash
+GET /api/log/types
+```
+
+**Response:**
+
+```json
+{
+  "event_types": [
+    {
+      "value": "PREVENTIVE_LUBRICATION",
+      "category": "PREVENTIVE",
+      "label": "Preventive Lubrication"
+    },
+    {
+      "value": "CORRECTIVE_BEARING_REPLACEMENT",
+      "category": "CORRECTIVE",
+      "label": "Corrective Bearing Replacement"
+    }
+    // ... more event types
+  ],
+  "severities": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+}
+```
+
+## InfluxDB Persistence Benefits
+
+<CardGroup cols={2}>
+  <Card title="Time-Series Alignment" icon="clock">
+    Logs share the same timestamp domain as sensor data, enabling precise correlation
+  </Card>
+  
+  <Card title="Indexed Tags" icon="database">
+    Fast queries by asset_id, event_type, and severity using InfluxDB's tag indexing
+  </Card>
+  
+  <Card title="Retention Policies" icon="calendar">
+    Configure automatic data expiration for older logs (e.g., keep 2 years)
+  </Card>
+  
+  <Card title="Flux Query Integration" icon="code">
+    Use Flux to join sensor data with maintenance logs for correlation analysis
+  </Card>
+</CardGroup>
+
+## Best Practices
+
+<Steps>
+  <Step title="Log Immediately">
+    Record maintenance events **as they happen** to ensure timestamp accuracy.
+  </Step>
+  
+  <Step title="Be Specific">
+    Include part numbers, measurements (e.g., "vibration reduced from 0.35g to 0.14g"), and technician notes.
+  </Step>
+  
+  <Step title="Use Correct Severity">
+    Reserve **CRITICAL** for emergency failures. Use **MEDIUM** for routine repairs.
+  </Step>
+  
+  <Step title="Backdate When Needed">
+    Use the datetime picker to log historical events that weren't recorded in real-time.
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Dashboard Overview" icon="desktop" href="/dashboard/overview">
+    Learn about the overall dashboard layout and features
+  </Card>
+  
+  <Card title="Metrics & Health Scoring" icon="chart-line" href="/dashboard/metrics">
+    Understand how sensor metrics are displayed and calculated
+  </Card>
+</CardGroup>

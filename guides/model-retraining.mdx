@@ -1,0 +1,403 @@
+---
+title: "Model Retraining"
+description: "How to retrain ML models, when to retrain, and performance benchmarking"
+icon: "brain"
+---
+
+## Overview
+
+The Predictive Maintenance System uses **Isolation Forest** models to detect anomalies. Over time, as equipment behavior changes or new operating conditions emerge, you may need to retrain models to maintain accuracy.
+
+## When to Retrain
+
+Retrain your models when you observe:
+
+<AccordionGroup>
+  <Accordion title="False Positive Rate Increases">
+    If the system flags normal operations as anomalies frequently (>5% of healthy periods), the baseline may be outdated.
+    
+    **Solution:** Retrain with fresh healthy data to recalibrate the normal operating envelope.
+  </Accordion>
+  
+  <Accordion title="Missed Anomalies (False Negatives)">
+    If known faults are not detected, the model may not have seen similar patterns during training.
+    
+    **Solution:** Expand training data to include diverse operating conditions.
+  </Accordion>
+  
+  <Accordion title="Operating Condition Changes">
+    After equipment upgrades, load profile changes, or seasonal variations.
+    
+    **Example:** A motor running at higher RPM after a gearbox replacement needs a new baseline.
+  </Accordion>
+  
+  <Accordion title="Scheduled Retraining">
+    Industry best practice: retrain every **30-90 days** to prevent model drift.
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+  Only retrain models using **healthy data**. Including faulty periods will corrupt the baseline and cause the model to accept abnormal behavior as normal.
+</Warning>
+
+---
+
+## Batch Model Retraining
+
+The system uses a **16-feature batch model** (v3) as the primary detector. It extracts statistical features from 100Hz raw sensor data.
+
+### Using the Retraining Script
+
+The `retrain_batch_model.py` script fetches raw 100Hz data from InfluxDB, extracts batch features, and trains a new model.
+
+#### Basic Usage
+
+```bash
+python -m scripts.retrain_batch_model --asset Motor-01 --seconds 300
+```
+
+#### Command Options
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--asset` | Motor-01 | Asset ID to retrain |
+| `--seconds` | 300 | Seconds of historical data to use |
+| `--window` | 100 | Points per window (100Hz = 1 second) |
+| `--save-dir` | backend/models | Directory to save model |
+
+#### Example: Retrain with 10 minutes of data
+
+```bash
+python -m scripts.retrain_batch_model \
+  --asset Motor-01 \
+  --seconds 600 \
+  --save-dir backend/models
+```
+
+<Tip>
+  Use at least **300 seconds** (5 minutes) of healthy data to ensure sufficient training samples (~300 windows).
+</Tip>
+
+---
+
+### Programmatic Retraining
+
+You can also import and call the retraining function from your own scripts:
+
+```python
+from scripts.retrain_batch_model import retrain_batch_model
+
+# Retrain and get the detector instance
+detector = retrain_batch_model(
+    asset_id="Motor-01",
+    range_seconds=600,
+    window_size=100,
+    save_dir="backend/models"
+)
+
+print(f"Model trained on {detector._training_sample_count} windows")
+```
+
+---
+
+## Model Versioning
+
+The system saves models with a version tag in the filename:
+
+```
+backend/models/Motor-01_batch_detector_v3.pkl
+```
+
+### Version History
+
+| Version | Features | Input | F1 Score | Notes |
+|---------|----------|-------|----------|-------|
+| **v1** | 4 | 1Hz raw signals | 62% | Legacy, deprecated |
+| **v2** | 6 | 1Hz derived features | 78% | Legacy fallback |
+| **v3** | 16 | 100Hz batch statistics | **99.6%** | Current primary |
+
+<Note>
+  The v3 batch model detects **jitter faults** (normal means, abnormal variance) that v2 cannot detect.
+</Note>
+
+### Manual Version Management
+
+To preserve model history, backup before retraining:
+
+```bash
+cp backend/models/Motor-01_batch_detector_v3.pkl \
+   backend/models/Motor-01_batch_detector_v3_backup_2026-03-02.pkl
+
+python -m scripts.retrain_batch_model --asset Motor-01 --seconds 600
+```
+
+---
+
+## Performance Benchmarking
+
+After retraining, validate model performance using the benchmark script.
+
+### Running the Benchmark
+
+```bash
+python -m scripts.benchmark_model
+```
+
+### Benchmark Output
+
+The script generates synthetic healthy and faulty data, then computes:
+
+```
+=== RESULTS ===
+
+--- Healthy Data (TARGET: mean < 0.15) ---
+   Mean score: 0.082
+   Std dev:    0.041
+
+--- Faulty Data (TARGET: mean > 0.6) ---
+   Mean score: 0.893
+   Std dev:    0.124
+
+--- Classification Metrics (threshold=0.3) ---
+   ACCURACY:         98.7%
+   PRECISION:        96.2%
+   RECALL:           100.0%
+   F1-SCORE:         98.0%
+   HEALTHY STABILITY: 99.0%
+```
+
+### Success Criteria
+
+<Steps>
+  <Step title="Healthy Stability ≥ 95%">
+    At least 95% of healthy samples should score below threshold (0.3).
+  </Step>
+  
+  <Step title="Precision ≥ 80%">
+    When the model flags an anomaly, it should be correct 80% of the time.
+  </Step>
+  
+  <Step title="Healthy Mean Score < 0.15">
+    Average anomaly score for healthy data should be low to minimize false alarms.
+  </Step>
+  
+  <Step title="Score Separation > 0.4">
+    Gap between faulty and healthy mean scores indicates clear decision boundary.
+  </Step>
+</Steps>
+
+<Warning>
+  If **Healthy Stability < 95%**, the model is too sensitive. Retrain with more diverse healthy data or adjust contamination parameter.
+</Warning>
+
+---
+
+## Feature Importance
+
+The batch model uses 16 statistical features extracted from 1-second windows:
+
+| Signal | Features |
+|--------|----------|
+| Voltage | mean, std, peak_to_peak, rms |
+| Current | mean, std, peak_to_peak, rms |
+| Power Factor | mean, std, peak_to_peak, rms |
+| Vibration | mean, std, peak_to_peak, rms |
+
+### Why These Features Matter
+
+<CardGroup cols={2}>
+  <Card title="mean" icon="chart-simple">
+    Captures average level (e.g., voltage drift)
+  </Card>
+  
+  <Card title="std (standard deviation)" icon="wave-square">
+    Detects jitter/instability (e.g., erratic vibration)
+  </Card>
+  
+  <Card title="peak_to_peak" icon="arrows-up-down">
+    Identifies transient spikes (e.g., voltage surges)
+  </Card>
+  
+  <Card title="rms (root mean square)" icon="signal">
+    Measures signal energy (e.g., vibration intensity)
+  </Card>
+</CardGroup>
+
+---
+
+## Retraining Workflow
+
+<Steps>
+  <Step title="Collect Healthy Data">
+    Run the system in monitoring mode for at least 5 minutes during normal operations. Ensure no faults are injected.
+    
+    ```bash
+    # Start monitoring
+    curl -X POST http://localhost:8000/system/start-monitoring \
+      -H "Content-Type: application/json" \
+      -d '{"asset_id": "Motor-01", "duration_seconds": 600}'
+    ```
+  </Step>
+  
+  <Step title="Verify Data Quality">
+    Check that InfluxDB has sufficient raw 100Hz points:
+    
+    ```bash
+    # Query point count
+    curl -X GET "http://localhost:8000/integration/sensor-history?asset_id=Motor-01&seconds=600" | jq 'length'
+    ```
+    
+    Target: At least **30,000 points** (300 seconds × 100Hz).
+  </Step>
+  
+  <Step title="Run Retraining Script">
+    ```bash
+    python -m scripts.retrain_batch_model --asset Motor-01 --seconds 600
+    ```
+    
+    Output:
+    ```
+    [Retrain] Querying 600s of raw 100Hz data for Motor-01...
+    [Retrain] Fetched 60000 raw points
+    [Retrain] 60000 raw points → ~600 windows of 100
+    [Retrain] Extracted 600 feature vectors (16 features each)
+    [Retrain] Model trained successfully on 600 windows
+    [Retrain] Model saved to backend/models/Motor-01_batch_detector_v3.pkl
+    ✅ Retraining complete. Model version: v3 (batch features)
+    ```
+  </Step>
+  
+  <Step title="Benchmark New Model">
+    ```bash
+    python -m scripts.benchmark_model
+    ```
+    
+    Ensure all success criteria pass before deploying to production.
+  </Step>
+  
+  <Step title="Deploy to Production">
+    Restart the backend to load the new model:
+    
+    ```bash
+    # Docker
+    docker-compose restart backend
+    
+    # Systemd
+    sudo systemctl restart predictive-maintenance
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Error: Insufficient raw data">
+    **Symptom:**
+    ```
+    ValueError: Insufficient raw data: got 50 points, need at least 100 (1 window)
+    ```
+    
+    **Cause:** InfluxDB query returned fewer points than required.
+    
+    **Solution:**
+    - Increase `--seconds` parameter
+    - Verify data generator is running at 100Hz
+    - Check InfluxDB retention policy hasn't deleted old data
+  </Accordion>
+  
+  <Accordion title="Error: Only X valid feature windows. Need >= 10 for training">
+    **Symptom:**
+    ```
+    ValueError: Only 3 valid feature windows. Need >= 10 for training.
+    ```
+    
+    **Cause:** Most windows had invalid/NaN values due to cold-start or missing fields.
+    
+    **Solution:**
+    - Use more recent data (cold-start windows have NaN features)
+    - Verify all 4 sensor fields (voltage, current, power_factor, vibration) are present
+  </Accordion>
+  
+  <Accordion title="Model overfits: High train accuracy, low test accuracy">
+    **Symptom:** Benchmark shows 100% accuracy but production has many false positives.
+    
+    **Cause:** Training data doesn't represent full operating diversity.
+    
+    **Solution:**
+    - Increase training duration to 10-30 minutes
+    - Include data from different load conditions (startup, steady-state, shutdown)
+    - Adjust Isolation Forest `contamination` parameter (default: 0.05)
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Advanced: Custom Feature Engineering
+
+To add custom features to the batch model:
+
+1. Edit `backend/ml/batch_features.py`
+2. Add your feature to `BATCH_FEATURE_NAMES`:
+   ```python
+   BATCH_FEATURE_NAMES = [
+       # ... existing features ...
+       "voltage_v_kurtosis",  # New feature
+   ]
+   ```
+3. Implement extraction logic in `extract_batch_features()`:
+   ```python
+   from scipy.stats import kurtosis
+   
+   features["voltage_v_kurtosis"] = kurtosis(window["voltage_v"])
+   ```
+4. Retrain the model to incorporate the new feature
+
+<Warning>
+  Changing feature definitions invalidates existing models. You must retrain from scratch.
+</Warning>
+
+---
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Recent Data" icon="clock">
+    Train on data from the last 7-30 days. Older data may not reflect current operating conditions.
+  </Card>
+  
+  <Card title="Validate Before Deploy" icon="check">
+    Always run benchmarks before deploying retrained models to production.
+  </Card>
+  
+  <Card title="Document Retraining Events" icon="file-lines">
+    Log why and when you retrained (e.g., "Retrained after gearbox replacement on 2026-03-02").
+  </Card>
+  
+  <Card title="Monitor Post-Deployment" icon="chart-line">
+    Watch false positive rates for 24-48 hours after deploying a new model.
+  </Card>
+</CardGroup>
+
+---
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Baseline Training" icon="bullseye" href="/ml/baseline-training">
+    Learn how baseline profiles are built
+  </Card>
+  
+  <Card title="Feature Engineering" icon="brain" href="/ml/feature-engineering">
+    Deep dive into the 16 batch features
+  </Card>
+  
+  <Card title="Dual Model Architecture" icon="layer-group" href="/ml/dual-model-architecture">
+    Understand v2 vs v3 model differences
+  </Card>
+  
+  <Card title="Monitoring" icon="display" href="/guides/monitoring">
+    Monitor model performance in production
+  </Card>
+</CardGroup>

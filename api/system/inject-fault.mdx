@@ -1,0 +1,284 @@
+---
+title: "POST /system/inject-fault"
+description: "Inject faults with configurable type and severity"
+---
+
+## Overview
+
+Injects synthetic fault patterns into the sensor data stream to test anomaly detection, health scoring, and alerting systems. Supports four fault types with three severity levels, enabling targeted validation of ML model performance.
+
+<Warning>
+  This endpoint requires the system to be in `MONITORING_HEALTHY` state. You must call `POST /system/calibrate` first.
+</Warning>
+
+## Endpoint
+
+```
+POST /system/inject-fault
+```
+
+## Query Parameters
+
+<ParamField query="asset_id" type="string" default="Motor-01">
+  Asset identifier to inject fault into
+</ParamField>
+
+<ParamField query="fault_type" type="enum" default="DEFAULT">
+  Type of fault pattern to inject
+  
+  **Options:**
+  - `SPIKE` - Sudden extreme values (voltage/current surges)
+  - `DRIFT` - Gradual degradation over time
+  - `JITTER` - Normal averages but high variance/noise
+  - `DEFAULT` - General fault pattern (random within severity range)
+</ParamField>
+
+<ParamField query="severity" type="enum" default="SEVERE">
+  Severity level of the fault
+  
+  **Options:**
+  - `MILD` - Targets MODERATE risk (health 50-74)
+  - `MEDIUM` - Targets HIGH risk (health 25-49)
+  - `SEVERE` - Targets CRITICAL risk (health 0-24)
+</ParamField>
+
+## Fault Type Specifications
+
+### SPIKE - Sudden Surges
+
+Simulates electrical transients or mechanical shocks:
+
+| Signal | MILD | MEDIUM | SEVERE |
+|--------|------|--------|--------|
+| Voltage | 235-240V (+5-10V) | 240-255V (+10-25V) | 255-280V (+25-50V) |
+| Current | 16-18A (+1-3A) | 18-22A (+3-7A) | 22-30A (+7-15A) |
+| Power Factor | 0.84-0.87 (-0.05 to -0.08) | 0.77-0.84 (-0.08 to -0.15) | 0.62-0.77 (-0.15 to -0.30) |
+| Vibration | 0.20-0.27g (1.3-1.8x) | 0.30-0.60g (2.0-4.0x) | 0.75-2.25g (5.0-15.0x) |
+
+**Detection:** Both legacy and batch models detect via amplitude features.
+
+### DRIFT - Gradual Degradation
+
+Simulates bearing wear, insulation breakdown, or mounting looseness:
+
+| Signal | MILD | MEDIUM | SEVERE |
+|--------|------|--------|--------|
+| Voltage | 235-238V (lower drift range) | 240-248V | 255-265V |
+| Current | 16-17A | 18-20A | 22-26A |
+| Power Factor | 0.84-0.86 | 0.77-0.81 | 0.62-0.70 |
+| Vibration | 0.20-0.24g | 0.30-0.45g | 0.75-1.50g |
+
+**Detection:** Both models detect via trend features and baseline deviation.
+
+### JITTER - High Variance Noise
+
+Simulates electrical noise, loose connections, or bearing chatter:
+
+<Note>
+  **JITTER is the key test for batch model superiority.** The 1Hz legacy model sees healthy averages and misses the fault. The 100Hz batch model detects it via `std` and `peak_to_peak` features.
+</Note>
+
+| Signal | MILD | MEDIUM | SEVERE |
+|--------|------|--------|--------|
+| Voltage Mean | 230V (healthy) | 230V (healthy) | 230V (healthy) |
+| Voltage Jitter | ±8V | ±15V | ±25V |
+| Current Mean | 15A (healthy) | 15A (healthy) | 15A (healthy) |
+| Current Jitter | ±2A | ±4A | ±7A |
+| PF Mean | 0.92 (healthy) | 0.92 (healthy) | 0.92 (healthy) |
+| PF Jitter | ±0.06 | ±0.10 | ±0.15 |
+| Vib Mean | 0.15g (healthy) | 0.15g (healthy) | 0.15g (healthy) |
+| Vib Jitter | ±0.10g | ±0.20g | ±0.40g |
+
+**Detection:** 
+- ❌ Legacy model: **Misses** (averages look healthy)
+- ✅ Batch model: **Detects** (high std/peak-to-peak)
+
+### DEFAULT - General Fault Pattern
+
+Random fault within severity range:
+
+- Uses same ranges as SPIKE but with random variation
+- Good for general testing when specific fault type is unknown
+
+## Response
+
+<ResponseField name="status" type="string" required>
+  Always returns `"started"` when fault injection begins
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Human-readable confirmation with fault details
+</ResponseField>
+
+<ResponseField name="state" type="string" required>
+  New system state: `"FAULT_INJECTION"`
+</ResponseField>
+
+## Example Requests
+
+```bash cURL - JITTER SEVERE
+curl -X POST "https://predictive-maintenance-uhlb.onrender.com/system/inject-fault?fault_type=JITTER&severity=SEVERE&asset_id=Motor-01"
+```
+
+```python Python - SPIKE MEDIUM
+import requests
+
+response = requests.post(
+    "https://predictive-maintenance-uhlb.onrender.com/system/inject-fault",
+    params={
+        "asset_id": "Motor-01",
+        "fault_type": "SPIKE",
+        "severity": "MEDIUM"
+    }
+)
+
+data = response.json()
+print(f"Injecting: {data['message']}")
+```
+
+```javascript JavaScript - DRIFT MILD
+const response = await fetch(
+  'https://predictive-maintenance-uhlb.onrender.com/system/inject-fault?' +
+  new URLSearchParams({
+    asset_id: 'Motor-01',
+    fault_type: 'DRIFT',
+    severity: 'MILD'
+  }),
+  { method: 'POST' }
+);
+
+const data = await response.json();
+console.log(`Injecting: ${data.message}`);
+```
+
+## Example Responses
+
+```json 200 OK - Success
+{
+  "status": "started",
+  "message": "Fault injection started (SEVERE JITTER)",
+  "state": "FAULT_INJECTION"
+}
+```
+
+```json 400 Bad Request - Invalid State
+{
+  "detail": "Cannot inject fault in state 'IDLE'. Must be MONITORING_HEALTHY."
+}
+```
+
+## Expected Health Impact
+
+After ~3-5 seconds of fault injection, health scores should align with severity targets:
+
+| Severity | Target Health | Target Risk | Expected DI Range | RUL |
+|----------|--------------|-------------|-------------------|-----|
+| **MILD** | 50-74 | MODERATE | 0.26-0.50 | ~10-19 days |
+| **MEDIUM** | 25-49 | HIGH | 0.51-0.75 | ~2-9 days |
+| **SEVERE** | 0-24 | CRITICAL | 0.76-1.00 | {"<"}2 days |
+
+<Note>
+  Health degradation is **cumulative**. The Degradation Index (DI) increases monotonically during fault injection and **does not reset** when returning to healthy monitoring. Only `POST /system/purge` resets DI to 0.0.
+</Note>
+
+## Monitoring Fault Injection
+
+Poll `GET /system/state` to track metrics:
+
+```json Live Metrics
+{
+  "state": "FAULT_INJECTION",
+  "message": "Injecting SEVERE JITTER fault...",
+  "fault_type": "JITTER",
+  "fault_severity": "SEVERE",
+  "training_samples": 1000,
+  "healthy_stability": 96.8,
+  "fault_capture_rate": 94.2  // ✅ >90% = strong detection
+}
+```
+
+**Validation Targets:**
+- `fault_capture_rate` ≥90%: Strong detection
+- `fault_capture_rate` 70-89%: Moderate detection
+- `fault_capture_rate` {"<"}70%: Weak detection (consider severity increase)
+
+## Stopping Fault Injection
+
+Two options:
+
+### Option 1: Reset to Healthy Monitoring
+
+```bash
+curl -X POST "https://predictive-maintenance-uhlb.onrender.com/system/reset"
+```
+
+Returns to `MONITORING_HEALTHY` state. **DI is retained** and may continue to increase if residual damage is detected.
+
+### Option 2: Stop Session
+
+```bash
+curl -X POST "https://predictive-maintenance-uhlb.onrender.com/system/stop"
+```
+
+Returns to `IDLE` state. **DI is retained**. Requires recalibration to resume monitoring.
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Model Validation" icon="vial">
+    Test detection accuracy across all fault types and severities
+  </Card>
+  
+  <Card title="Dashboard Testing" icon="chart-line">
+    Verify UI updates (red anomaly lines, health score drops, alerts)
+  </Card>
+  
+  <Card title="Alert Tuning" icon="bell">
+    Trigger threshold-based alerts and validate notification delivery
+  </Card>
+  
+  <Card title="Batch Model Advantage" icon="sparkles">
+    Run JITTER faults to demonstrate 100Hz batch model superiority
+  </Card>
+</CardGroup>
+
+## Error Responses
+
+<ResponseExample>
+```json 400 Invalid State
+{
+  "detail": "Cannot inject fault in state 'IDLE'. Must be MONITORING_HEALTHY."
+}
+```
+</ResponseExample>
+
+**Resolution:** Call `POST /system/calibrate` first.
+
+<ResponseExample>
+```json 422 Validation Error
+{
+  "detail": [
+    {
+      "loc": ["query", "fault_type"],
+      "msg": "value is not a valid enumeration member; permitted: 'SPIKE', 'DRIFT', 'JITTER', 'DEFAULT'",
+      "type": "type_error.enum"
+    }
+  ]
+}
+```
+</ResponseExample>
+
+**Resolution:** Use valid enum values for `fault_type` and `severity`.
+
+## Performance Characteristics
+
+- **Latency:** {"<"}200ms (injection runs in background)
+- **Data Rate:** 100 points/second (10ms intervals)
+- **InfluxDB Writes:** 100 points/second
+- **Memory Impact:** Minimal (reuses existing buffers)
+
+## Related Endpoints
+
+- [GET /system/state](/api/system/state) - Monitor fault injection metrics
+- [POST /system/reset](/api/system/reset) - Stop faults and return to healthy monitoring
+- [POST /system/purge](/api/system/purge) - Deep reset with DI=0.0

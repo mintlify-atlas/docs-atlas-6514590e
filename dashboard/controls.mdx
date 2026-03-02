@@ -1,0 +1,260 @@
+---
+title: 'System Controls'
+description: 'Calibration, fault injection, reset, and purge controls for demo lifecycle management'
+---
+
+The **System Control Panel** provides operators with buttons to manage the demo lifecycle, from calibration through fault injection to system reset.
+
+## State Machine
+
+The system operates in one of four states:
+
+<Steps>
+  <Step title="IDLE">
+    System is ready but not collecting data. Click **Calibrate** to begin.
+  </Step>
+  
+  <Step title="CALIBRATING">
+    Backend is collecting healthy baseline data (15 seconds). Wait for completion.
+  </Step>
+  
+  <Step title="MONITORING_HEALTHY">
+    System is streaming sensor data and monitoring for anomalies. Normal operation mode.
+  </Step>
+  
+  <Step title="FAULT_INJECTION">
+    A fault has been injected and the system is simulating degraded conditions.
+  </Step>
+</Steps>
+
+## Control Buttons
+
+### 1. Calibrate
+
+<Card title="🎯 Calibrate" icon="crosshairs">
+  **Available in:** IDLE state
+  
+  **Action:** Starts the calibration process to build a healthy baseline.
+  
+  **Duration:** ~15 seconds (collects 100+ sensor readings)
+  
+  **Outcome:** Trains the Isolation Forest models and transitions to MONITORING_HEALTHY.
+</Card>
+
+**What Happens During Calibration:**
+
+1. Backend calls `POST /api/system/calibrate` with `asset_id="Motor-01"`
+2. Data generator produces 100 healthy samples at 100 Hz
+3. Features are extracted (6-D legacy + 16-D batch)
+4. Two Isolation Forest models are trained:
+   - **Legacy Model:** 6 features, 1 Hz sampling
+   - **Batch Model:** 16 features (mean/std/peak/RMS), 100 Hz windows
+5. Baseline targets are computed (mean voltage, current, vibration, power factor)
+6. System transitions to **MONITORING_HEALTHY**
+
+<Info>
+Calibration uses the **3-Sigma Validation** rule to ensure baseline data quality. Samples beyond 3 standard deviations are rejected.
+</Info>
+
+### 2. Inject Fault
+
+<Card title="⚡ Inject Fault" icon="bolt">
+  **Available in:** MONITORING_HEALTHY state
+  
+  **Action:** Simulates a fault condition to demonstrate anomaly detection.
+  
+  **Configuration:** Select **Fault Type** and **Severity Level** before clicking.
+</Card>
+
+#### Fault Types
+
+<Tabs>
+  <Tab title="Random Fault">
+    **Type:** DEFAULT
+    
+    **Behavior:** General fault pattern with mixed sensor deviations
+    
+    **Detection:** Both Legacy and Batch models
+  </Tab>
+  
+  <Tab title="Sudden Spike">
+    **Type:** SPIKE
+    
+    **Behavior:** Abrupt voltage/current surges
+    
+    **Detection:** Both Legacy and Batch models
+  </Tab>
+  
+  <Tab title="Gradual Drift">
+    **Type:** DRIFT
+    
+    **Behavior:** Slow degradation over time (e.g., bearing wear)
+    
+    **Detection:** Both Legacy and Batch models
+  </Tab>
+  
+  <Tab title="Jitter (Advanced)">
+    **Type:** JITTER
+    
+    **Behavior:** Normal mean values but **high variance** (e.g., vibration σ=0.17g vs. healthy σ=0.03g)
+    
+    **Detection:** **Batch model only** (requires std/peak features)
+  </Tab>
+</Tabs>
+
+#### Severity Levels
+
+Severity determines the **target risk level** and magnitude of sensor deviations:
+
+| Severity | Target Risk | Health Score | Color | Example |
+|----------|-------------|--------------|-------|---------|
+| 🟡 **MILD** | MODERATE | 50-74 | Yellow | Minor bearing wear |
+| 🟠 **MEDIUM** | HIGH | 25-49 | Orange | Significant misalignment |
+| 🔴 **SEVERE** | CRITICAL | 0-24 | Red | Imminent failure |
+
+<Info>
+Severity levels are calibrated to specific risk zones using amplitude multipliers in the fault injection logic. SEVERE faults produce health scores in the 0-24 range.
+</Info>
+
+**API Call:**
+
+```bash
+POST /api/system/inject-fault
+{
+  "asset_id": "Motor-01",
+  "fault_type": "SPIKE",
+  "severity": "SEVERE"
+}
+```
+
+### 3. Reset
+
+<Card title="🔄 Reset" icon="arrow-rotate-right">
+  **Available in:** FAULT_INJECTION state
+  
+  **Action:** Returns the system to healthy operation (MONITORING_HEALTHY).
+  
+  **Effect:** Stops fault injection and resumes normal data generation.
+</Card>
+
+**Use Case:** After observing how the dashboard reacts to a fault (red lines on chart, health score drop, explanations), click Reset to return to normal monitoring.
+
+### 4. Stop
+
+<Card title="⏹️ Stop" icon="stop">
+  **Available in:** MONITORING_HEALTHY or FAULT_INJECTION
+  
+  **Action:** Stops data generation and returns to IDLE state.
+  
+  **Effect:** Dashboard stops receiving new sensor data.
+</Card>
+
+**Use Case:** End the current monitoring session. Data remains in InfluxDB but no new points are generated.
+
+### 5. Purge & Re-Calibrate
+
+<Card title="🗑️ Purge & Re-Calibrate" icon="trash" color="red">
+  **Available in:** Any state
+  
+  **Action:** **DESTRUCTIVE** — Deletes all sensor data, ML models, and resets to IDLE.
+  
+  **Effect:** Wipes InfluxDB, clears baselines, resets Degradation Index (DI) to 0.0.
+</Card>
+
+<Warning>
+This action is **irreversible**. A confirmation dialog will appear before execution. Use this to start fresh or clear corrupted data.
+</Warning>
+
+**What Gets Deleted:**
+
+- All sensor data in InfluxDB (`sensor_data`, `features`, `maintenance_logs`)
+- In-memory ML baselines and trained Isolation Forest models
+- Event history and degradation state
+- Cumulative Degradation Index (DI) reset to 0.0
+
+**API Call:**
+
+```bash
+POST /api/system/purge
+```
+
+## Demo Workflow
+
+Follow this sequence for a complete demonstration:
+
+<Steps>
+  <Step title="Start Fresh">
+    Click **Purge & Re-Calibrate** to reset the system to a clean state.
+  </Step>
+  
+  <Step title="Calibrate Baseline">
+    Click **🎯 Calibrate** and wait ~15 seconds for completion.
+    
+    You'll see:
+    - State badge turns **green** (MONITORING_HEALTHY)
+    - Baseline targets appear on Status Cards
+    - Chart starts filling with sensor data
+  </Step>
+  
+  <Step title="Observe Healthy Operation">
+    Watch the dashboard for 30-60 seconds:
+    - Health Score stays in **75-100** (green)
+    - No red lines on the chart
+    - Risk level shows **LOW**
+  </Step>
+  
+  <Step title="Inject a Fault">
+    Select:
+    - **Fault Type:** Sudden Spike
+    - **Severity:** 🔴 SEVERE
+    
+    Click **⚡ Inject Fault**.
+  </Step>
+  
+  <Step title="Watch Anomaly Detection">
+    Within 5-10 seconds:
+    - Health Score drops to **0-24** (red ring)
+    - Red dashed lines appear on chart
+    - Risk badge changes to **CRITICAL**
+    - Explanations appear in Insight Panel (e.g., "Vibration 3.2σ above normal")
+  </Step>
+  
+  <Step title="Reset to Healthy">
+    Click **🔄 Reset** to return to normal operation.
+    
+    **Note:** Health Score will **not** immediately return to 100 due to the Cumulative Degradation Index (DI). The damage is permanent unless you purge.
+  </Step>
+</Steps>
+
+## State Badge Indicator
+
+The **State Badge** in the control panel shows the current system state with color coding:
+
+| State | Color | Meaning |
+|-------|-------|----------|
+| IDLE | Gray | System is inactive |
+| CALIBRATING... | Blue | Building baseline models |
+| Monitoring (Healthy) | Green | Normal operation |
+| Fault Injection Active | Red | Simulating degraded conditions |
+
+## Performance Metrics
+
+Below the control buttons, you'll see **Demo Flow Instructions** and validation metrics:
+
+- **Training Samples:** Number of baseline samples collected during calibration
+- **Healthy Stability:** Percentage of healthy samples correctly classified
+- **Fault Capture Rate:** Percentage of faulty samples correctly detected
+
+These metrics are updated in real-time and displayed in the **Performance Card** on the right sidebar.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Metrics & Health Scoring" icon="chart-line" href="/dashboard/metrics">
+    Understand how health scores and risk levels are calculated
+  </Card>
+  
+  <Card title="Operator Logs" icon="clipboard" href="/dashboard/operator-logs">
+    Log maintenance events to correlate with sensor anomalies
+  </Card>
+</CardGroup>

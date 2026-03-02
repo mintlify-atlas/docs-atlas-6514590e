@@ -1,0 +1,200 @@
+---
+title: 'Error Handling'
+description: 'Understanding API error responses and troubleshooting'
+---
+
+## Error Response Format
+
+All API errors follow the FastAPI standard error format:
+
+```json
+{
+  "detail": "Error message describing what went wrong"
+}
+```
+
+For validation errors (422), the response includes detailed field-level information:
+
+```json
+{
+  "detail": [
+    {
+      "loc": ["body", "signals", "voltage_v"],
+      "msg": "field required",
+      "type": "value_error.missing"
+    }
+  ]
+}
+```
+
+## HTTP Status Codes
+
+The API uses standard HTTP status codes to indicate success or failure:
+
+### Success Codes
+
+| Code | Description |
+|------|-------------|
+| `200 OK` | Request successful, data returned |
+
+### Client Error Codes
+
+| Code | Description | Common Causes |
+|------|-------------|---------------|
+| `422 Unprocessable Entity` | Validation error | Missing required fields, invalid data types, out-of-range values |
+
+### Server Error Codes
+
+| Code | Description | Common Causes |
+|------|-------------|---------------|
+| `503 Service Unavailable` | Database or service unavailable | InfluxDB connection failed, deployment environment limitations |
+
+## Common Error Scenarios
+
+### Validation Errors (422)
+
+Occur when the request payload doesn't match the expected schema.
+
+<CodeGroup>
+
+```json Missing Required Field
+{
+  "detail": [
+    {
+      "loc": ["body", "signals", "current_a"],
+      "msg": "field required",
+      "type": "value_error.missing"
+    }
+  ]
+}
+```
+
+```json Invalid Data Type
+{
+  "detail": [
+    {
+      "loc": ["body", "signals", "voltage_v"],
+      "msg": "value is not a valid float",
+      "type": "type_error.float"
+    }
+  ]
+}
+```
+
+```json Computed Field Provided
+{
+  "detail": [
+    {
+      "loc": ["body", "signals", "power_kw"],
+      "msg": "power_kw is computed server-side and must not be provided",
+      "type": "value_error"
+    }
+  ]
+}
+```
+
+</CodeGroup>
+
+<Note>
+  The `loc` field shows the exact path to the invalid field: `["body", "signals", "voltage_v"]` means the error is in `request.body.signals.voltage_v`.
+</Note>
+
+### Database Unavailable (503)
+
+Occurs when InfluxDB is not available or cannot be reached.
+
+```json
+{
+  "detail": "Database error: Failed to connect to InfluxDB"
+}
+```
+
+<Warning>
+  In serverless deployments or environments without InfluxDB access, endpoints requiring database connectivity will return 503. Use the `/system/*` endpoints for demo functionality.
+</Warning>
+
+**Fallback Options:**
+
+- Use `/system/*` endpoints for demo features that don't require database persistence
+- Check `/health` endpoint to verify database connectivity status
+- Ensure `INFLUX_TOKEN` and `INFLUX_URL` environment variables are configured
+
+### InfluxDB Not Available in Deployment
+
+```json
+{
+  "detail": "InfluxDB is not available in this deployment. Use /system/* endpoints for demo."
+}
+```
+
+This occurs when the InfluxDB client libraries are not available in the deployment environment (e.g., certain serverless platforms).
+
+**Resolution:**
+
+- Use alternative endpoints under `/system/*` that use in-memory storage
+- Deploy to an environment that supports InfluxDB connectivity
+- Check the deployment logs for import errors
+
+## Error Handling Best Practices
+
+### Check Response Status
+
+Always check the HTTP status code before processing the response:
+
+```javascript
+const response = await fetch(`${API_BASE_URL}/ingest`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(sensorData),
+});
+
+if (!response.ok) {
+  const error = await response.json();
+  console.error('API Error:', error.detail);
+  // Handle error appropriately
+}
+```
+
+### Handle Validation Errors
+
+Parse validation errors to provide user-friendly feedback:
+
+```javascript
+if (response.status === 422) {
+  const error = await response.json();
+  error.detail.forEach(err => {
+    const field = err.loc.join('.');
+    console.error(`${field}: ${err.msg}`);
+  });
+}
+```
+
+### Implement Retry Logic
+
+For 503 errors, implement exponential backoff:
+
+```python
+import time
+import requests
+
+def ingest_with_retry(data, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(f'{API_BASE_URL}/ingest', json=data)
+            response.raise_for_status()
+            return response.json()
+        except requests.HTTPError as e:
+            if e.response.status_code == 503 and attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # Exponential backoff
+                time.sleep(wait_time)
+                continue
+            raise
+```
+
+## Debugging Tips
+
+1. **Check the `/health` endpoint** to verify API and database status
+2. **Use the interactive docs** at `/docs` to test requests and see expected schemas
+3. **Validate your payload** against the schema before sending requests
+4. **Check CORS settings** if requests fail from the browser
+5. **Review the `loc` field** in validation errors to identify the exact problem field

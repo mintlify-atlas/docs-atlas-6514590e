@@ -1,0 +1,418 @@
+---
+title: Health Assessment
+description: Cumulative Degradation Index (DI), health scoring (0-100), risk levels, and RUL calculation
+---
+
+## Overview
+
+The health assessment system converts anomaly scores into actionable business metrics using a **Cumulative Degradation Index (DI)**. Unlike instant health scores, DI tracks accumulated damage over time, providing a physics-inspired approach to prognostics.
+
+## Cumulative Degradation Index (DI)
+
+The DI is a **monotonically increasing** damage accumulator based on Miner's Rule from fatigue analysis:
+
+### Core Properties
+
+<CardGroup cols={2}>
+  <Card title="Monotonic" icon="arrow-up">
+    DI **never decreases** (except on explicit purge). A quiet minute doesn't erase past damage.
+  </Card>
+  
+  <Card title="Dead-Zone" icon="shield">
+    Scores below 0.65 (healthy noise) produce **zero damage** to prevent phantom accumulation.
+  </Card>
+  
+  <Card title="Persistent" icon="database">
+    DI is saved to InfluxDB and recovered on restart. State survives process restarts.
+  </Card>
+  
+  <Card title="Resettable" icon="rotate">
+    `POST /system/purge` writes DI=0.0 to InfluxDB and clears all state.
+  </Card>
+</CardGroup>
+
+### Miner's Rule Formula
+
+Damage accumulation follows quadratic severity scaling:
+
+```python
+# From assessor.py:355-395
+HEALTHY_FLOOR = 0.65
+SENSITIVITY_CONSTANT = 0.005
+
+def compute_cumulative_degradation(last_di, batch_score, dt=1.0):
+    # Dead-zone: scores < 0.65 → zero damage
+    if batch_score < HEALTHY_FLOOR:
+        effective_severity = 0.0
+    else:
+        # Remap [0.65, 1.0] → [0.0, 1.0]
+        effective_severity = (batch_score - HEALTHY_FLOOR) / (1.0 - HEALTHY_FLOOR)
+    
+    # Quadratic damage scaling
+    damage_rate = (effective_severity ** 2) * SENSITIVITY_CONSTANT
+    
+    # Monotonic update
+    raw_di = last_di + damage_rate * dt
+    new_di = max(last_di, raw_di)  # Never decrease
+    new_di = min(1.0, new_di)      # Clamp to [0, 1]
+    
+    return (new_di, damage_rate)
+```
+
+### Sensitivity Calibration
+
+```python
+SENSITIVITY_CONSTANT = 0.005  # Tuned for demo
+```
+
+**Damage Rate Examples**:
+- **Score = 0.50** (healthy noise) → damage_rate = 0.0 (dead-zone)
+- **Score = 0.70** (mild fault) → effective_severity = 0.14 → damage_rate = 0.000098
+- **Score = 0.85** (moderate fault) → effective_severity = 0.57 → damage_rate = 0.00162
+- **Score = 1.00** (severe fault) → effective_severity = 1.0 → damage_rate = 0.005
+
+<Info>
+  **Time to Failure**: At max fault (score=1.0), DI increases by 0.005/second:  
+  `1.0 / 0.005 = 200 seconds = 3.3 minutes`  
+  Real-world faults (score ~0.85) take **4-5 minutes** to drive health from 100 → 0.
+</Info>
+
+## Health Score Derivation
+
+Health is directly derived from DI:
+
+```python
+# From assessor.py:398-411
+def health_from_degradation(di: float) -> int:
+    raw = (1.0 - di) * 100.0
+    return int(max(0, min(100, round(raw))))
+```
+
+| DI Value | Health Score | Interpretation |
+|----------|--------------|----------------|
+| 0.00 | 100 | Brand new |
+| 0.15 | 85 | Early fatigue |
+| 0.30 | 70 | Moderate wear |
+| 0.50 | 50 | Half-life |
+| 0.75 | 25 | Critical |
+| 1.00 | 0 | Failed |
+
+<Note>
+  **Inversion**: DI represents accumulated damage, so health is `100 × (1 - DI)`. As DI increases, health decreases.
+</Note>
+
+## Risk Level Classification
+
+Health scores are mapped to four risk levels using **named threshold constants**:
+
+```python
+# From assessor.py:32-36
+THRESHOLD_CRITICAL = 25   # Below this = CRITICAL
+THRESHOLD_HIGH = 50       # Below this = HIGH
+THRESHOLD_MODERATE = 75   # Below this = MODERATE
+# Above 75 = LOW
+```
+
+### Risk Classification Logic
+
+```python
+# From assessor.py:189-208
+def classify_risk_level(health_score: int) -> RiskLevel:
+    if health_score < THRESHOLD_CRITICAL:
+        return RiskLevel.CRITICAL  # 0-24
+    elif health_score < THRESHOLD_HIGH:
+        return RiskLevel.HIGH      # 25-49
+    elif health_score < THRESHOLD_MODERATE:
+        return RiskLevel.MODERATE  # 50-74
+    else:
+        return RiskLevel.LOW       # 75-100
+```
+
+### Risk Level Characteristics
+
+<Accordion title="LOW Risk (Health 75-100)">
+  **Color**: Green (#10b981)  
+  **RUL**: 30-90 days  
+  **Action**: Continue standard monitoring  
+  **Dashboard**: No red lines, green health ring
+  
+  **Typical Scenario**:  
+  All sensors within 5% of baseline, DI < 0.25, damage rate ≈ 0
+</Accordion>
+
+<Accordion title="MODERATE Risk (Health 50-74)">
+  **Color**: Yellow/Amber (#f59e0b)  
+  **RUL**: 7-30 days  
+  **Action**: Add to next maintenance cycle  
+  **Dashboard**: Yellow health ring, anomaly markers appear
+  
+  **Typical Scenario**:  
+  Vibration 10% above baseline, DI = 0.30-0.50, damage rate = 0.001/s
+</Accordion>
+
+<Accordion title="HIGH Risk (Health 25-49)">
+  **Color**: Orange (#f97316)  
+  **RUL**: 1-7 days  
+  **Action**: Schedule maintenance within 48-72 hours  
+  **Dashboard**: Orange health ring, red shaded anomaly regions
+  
+  **Typical Scenario**:  
+  Vibration 25% above baseline, power factor degraded, DI = 0.50-0.75
+</Accordion>
+
+<Accordion title="CRITICAL Risk (Health 0-24)">
+  **Color**: Red (#ef4444)  
+  **RUL**: 0-1 days  
+  **Action**: Immediate inspection required  
+  **Dashboard**: Red health ring, continuous anomaly shading, critical alert
+  
+  **Typical Scenario**:  
+  Vibration > 50% above baseline, current spikes, DI > 0.75, damage rate > 0.003/s
+</Accordion>
+
+## Remaining Useful Life (RUL)
+
+### Physics-Based RUL
+
+RUL is calculated from the current degradation state:
+
+```python
+# From assessor.py:414-431
+def rul_from_degradation(di: float, damage_rate: float) -> float:
+    remaining = 1.0 - di
+    
+    if damage_rate < 1e-9:
+        return 99999.0  # Effectively infinite (no active damage)
+    
+    rul_seconds = remaining / damage_rate
+    return round(rul_seconds / 3600.0, 2)  # Convert to hours
+```
+
+**Example Calculations**:
+
+| DI | Damage Rate | Remaining | RUL |
+|----|-------------|-----------|-----|
+| 0.20 | 0.001/s | 0.80 | 222 hours (9.3 days) |
+| 0.50 | 0.002/s | 0.50 | 69 hours (2.9 days) |
+| 0.75 | 0.004/s | 0.25 | 17 hours (0.7 days) |
+| 0.90 | 0.005/s | 0.10 | 5.6 hours |
+
+<Warning>
+  **RUL Volatility**: RUL is inversely proportional to damage rate, which fluctuates with real-time anomaly scores. A spike can temporarily reduce RUL, then recover if the fault clears. Use **maintenance window** (risk-based lookup) for planning.
+</Warning>
+
+### Heuristic RUL (Fallback)
+
+When damage rate is near zero, use risk-based lookup:
+
+```python
+# From assessor.py:39-44
+RUL_BY_RISK = {
+    "CRITICAL": (0.0, 1.0),    # 0-1 days → midpoint = 0.5 days
+    "HIGH": (1.0, 7.0),        # 1-7 days → midpoint = 4.0 days
+    "MODERATE": (7.0, 30.0),   # 7-30 days → midpoint = 18.5 days
+    "LOW": (30.0, 90.0),       # 30-90 days → midpoint = 60.0 days
+}
+```
+
+## DI Threshold Milestones
+
+The system logs warnings when DI crosses specific milestones:
+
+```python
+# From assessor.py:69-72
+DI_THRESHOLD_15 = 0.15    # "Motor fatigue reached 15%"
+DI_THRESHOLD_30 = 0.30    # "Motor fatigue reached 30%"
+DI_THRESHOLD_50 = 0.50    # "Motor fatigue reached 50%"
+DI_THRESHOLD_75 = 0.75    # "Motor fatigue reached 75% — CRITICAL"
+```
+
+### Milestone Detection
+
+```python
+# From assessor.py:450-473
+def crossed_thresholds(old_di: float, new_di: float) -> list:
+    thresholds = [
+        (DI_THRESHOLD_15, "15%"),
+        (DI_THRESHOLD_30, "30%"),
+        (DI_THRESHOLD_50, "50%"),
+        (DI_THRESHOLD_75, "75%"),
+    ]
+    crossed = []
+    for thr, label in thresholds:
+        if old_di < thr <= new_di:
+            crossed.append((thr, label))
+    return crossed
+```
+
+**Example**:
+If DI transitions from 0.12 → 0.18 in one update, the system logs:  
+`"⚠️ Motor fatigue reached 15%"`
+
+## DI Persistence & Hydration
+
+### Write to InfluxDB
+
+DI is persisted every second during monitoring:
+
+```python
+# Write DI to InfluxDB (system_routes.py)
+db.write_data(
+    measurement="degradation_state",
+    tags={"asset_id": asset_id},
+    fields={"di": new_di},
+    timestamp=datetime.now(timezone.utc)
+)
+```
+
+### Recovery on Restart
+
+```python
+# Query last DI value (system_routes.py)
+flux_query = '''
+    from(bucket: "sensor_data")
+    |> range(start: -30d)
+    |> filter(fn: (r) => r["_measurement"] == "degradation_state")
+    |> filter(fn: (r) => r["asset_id"] == "Motor-01")
+    |> filter(fn: (r) => r["_field"] == "di")
+    |> last()
+'''
+
+results = db.query_data(flux_query)
+if results:
+    last_di = results[0]['value']  # Resume from persisted DI
+else:
+    last_di = 0.0  # Fresh start
+```
+
+<Info>
+  **State Survival**: If the backend restarts mid-session, DI is recovered from InfluxDB's last value. Damage accumulation continues seamlessly from the previous state.
+</Info>
+
+## Health Report Structure
+
+### HealthReport Schema
+
+```python
+# From assessor.py:100-124
+class HealthReport(BaseModel):
+    report_id: str                    # UUID for tracking
+    timestamp: datetime               # UTC report generation time
+    asset_id: str                     # Asset identifier
+    
+    health_score: int                 # 0-100 (derived from DI)
+    risk_level: RiskLevel             # LOW/MODERATE/HIGH/CRITICAL
+    maintenance_window_days: float    # Estimated days until service
+    
+    explanations: List[Explanation]   # Human-readable reasons
+    metadata: ReportMetadata          # Model version + baseline ID
+```
+
+### Example Report (Moderate Risk)
+
+```json
+{
+  "report_id": "a3f8b2c1-7d4e-4b9a-8f2c-1e5d6a7b9c0d",
+  "timestamp": "2026-03-02T14:23:15Z",
+  "asset_id": "Motor-01",
+  "health_score": 68,
+  "risk_level": "MODERATE",
+  "maintenance_window_days": 18.5,
+  "explanations": [
+    {
+      "reason": "Moderate deviation from baseline detected (score: 0.42). Monitor closely.",
+      "related_features": ["vibration_g", "power_factor"],
+      "confidence_score": 0.70
+    }
+  ],
+  "metadata": {
+    "model_version": "detector:2.0|baseline:2024-01-15",
+    "assessment_version": "1.0.0"
+  }
+}
+```
+
+## Explanation Generation
+
+The system provides context-aware explanations based on risk level:
+
+```python
+# From assessor.py:252-296
+def generate_explanations(
+    health_score: int,
+    risk_level: RiskLevel,
+    anomaly_score: float,
+    feature_contributions: Optional[Dict[str, float]] = None
+) -> List[Explanation]:
+    explanations = []
+    
+    if risk_level == RiskLevel.CRITICAL:
+        explanations.append(Explanation(
+            reason=f"Critical anomaly detected (score: {anomaly_score:.2f}). Immediate attention required.",
+            related_features=list(feature_contributions.keys()),
+            confidence_score=0.95
+        ))
+    elif risk_level == RiskLevel.HIGH:
+        explanations.append(Explanation(
+            reason=f"High anomaly level detected (score: {anomaly_score:.2f}). Schedule maintenance soon.",
+            related_features=list(feature_contributions.keys()),
+            confidence_score=0.85
+        ))
+    # ...
+    
+    return explanations
+```
+
+<Note>
+  **CRITICAL risk MUST have at least one explanation** per CONTRACTS.md requirement. LOW risk explanations are optional.
+</Note>
+
+## Purge & Reset
+
+### Full System Reset
+
+```http
+POST /system/purge
+```
+
+**Actions**:
+1. Write DI=0.0 to InfluxDB `degradation_state` measurement
+2. Clear in-memory baselines and detectors
+3. Clear sensor history buffer
+4. Reset state machine to IDLE
+5. Clear all cached reports
+
+**Response**:
+```json
+{
+  "status": "purged",
+  "message": "All data and models cleared. System reset to IDLE.",
+  "di_reset": true,
+  "influxdb_cleared": false  // Data retained for historical analysis
+}
+```
+
+<Warning>
+  **Purge does NOT delete InfluxDB historical data**. It only resets the runtime state. To clear historical data, use InfluxDB's delete API or UI.
+</Warning>
+
+## Source Code Reference
+
+Key implementation files:
+
+- **DI Engine**: `backend/rules/assessor.py:355-473` - Cumulative degradation functions
+- **Health Scoring**: `backend/rules/assessor.py:153-187` - Score computation
+- **Risk Classification**: `backend/rules/assessor.py:189-208` - Threshold-based logic
+- **RUL Calculation**: `backend/rules/assessor.py:210-228` (heuristic), `414-431` (physics-based)
+- **DI Persistence**: `backend/api/system_routes.py` - InfluxDB write/read operations
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Fault Simulation" icon="flask" href="/features/fault-simulation">
+    Test health assessment with controlled fault injection
+  </Card>
+  <Card title="Reporting" icon="file-pdf" href="/features/reporting">
+    Generate PDF/Excel reports with health metrics
+  </Card>
+</CardGroup>

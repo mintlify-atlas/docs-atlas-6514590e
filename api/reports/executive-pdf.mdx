@@ -1,0 +1,111 @@
+---
+title: Executive PDF report
+description: Generate 1-page executive summary PDF with Health Grade (A-F) for Plant Managers
+---
+
+## GET /api/v1/report/{asset_id}?format=pdf
+
+Generate a concise 1-page executive PDF report for plant managers and executives.
+
+### Path Parameters
+
+<ParamField path="asset_id" type="string" required>
+  Asset identifier (e.g., `Motor-01`)
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="format" type="string">
+  Must be `pdf` (default)
+</ParamField>
+
+### Response
+
+Returns a PDF file download with:
+
+- **Health Grade**: Letter grade (A/B/C/D/F) based on health score
+- **Risk Level**: Color-coded badge (LOW/MODERATE/HIGH/CRITICAL)
+- **Key Metrics**: Health score, RUL, DI, damage rate
+- **Maintenance Window**: Estimated days until recommended service
+- **Timestamp**: Report generation time
+
+### Example
+
+```bash cURL
+curl -X GET "https://predictive-maintenance-uhlb.onrender.com/api/v1/report/Motor-01?format=pdf" \
+  -H "Accept: application/pdf" \
+  --output motor01-report.pdf
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    "https://predictive-maintenance-uhlb.onrender.com/api/v1/report/Motor-01",
+    params={"format": "pdf"}
+)
+
+with open("motor01-report.pdf", "wb") as f:
+    f.write(response.content)
+```
+
+### Health Grade Scale
+
+| Health Score | Grade | Risk Level | Interpretation |
+|--------------|-------|------------|----------------|
+| 90-100 | A | LOW | Excellent condition |
+| 75-89 | B | LOW | Good condition |
+| 50-74 | C | MODERATE | Fair condition, monitor |
+| 25-49 | D | HIGH | Poor condition, schedule maintenance |
+| 0-24 | F | CRITICAL | Failing, immediate action required |
+
+### File Naming
+
+Downloaded files follow the pattern:
+```
+health-report_{asset_id}_{timestamp}.pdf
+```
+
+Example: `health-report_Motor-01_2026-03-02T10-30-00Z.pdf`
+
+<Info>
+  This report is designed for quick executive briefings. For technical analysis, use the [Industrial PDF](/api/reports/industrial-pdf) instead.
+</Info>
+
+### Status Codes
+
+- `200` - Report generated successfully
+- `404` - Asset not found or no health data available
+- `503` - Report generation failed
+
+## Report Contents
+
+The executive PDF includes:
+
+1. **Header**: Asset ID, timestamp, report type
+2. **Health Summary Card**:
+   - Health Grade (A-F)
+   - Health Score (0-100)
+   - Risk Level badge
+3. **Metrics Grid**:
+   - Degradation Index (DI)
+   - Damage Rate (per hour)
+   - Remaining Useful Life (RUL)
+   - Lifetime Anomaly Batches
+4. **Maintenance Window**: Days until recommended service
+5. **Footer**: Report generation metadata
+
+<Tip>
+  Generate reports after each shift change or weekly for routine monitoring. The report uses the latest health assessment from `/api/v1/status/{asset_id}`.
+</Tip>
+
+### Related Endpoints
+
+<CardGroup cols={2}>
+  <Card title="Analyst Excel" icon="file-excel" href="/api/reports/analyst-excel">
+    Multi-sheet workbook with raw data
+  </Card>
+  <Card title="Industrial PDF" icon="file-pdf" href="/api/reports/industrial-pdf">
+    5-page technical certificate
+  </Card>
+</CardGroup>

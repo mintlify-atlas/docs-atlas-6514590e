@@ -1,0 +1,129 @@
+---
+title: 'Dashboard Overview'
+description: 'Real-time glassmorphism dashboard with streaming telemetry and live status monitoring'
+---
+
+The Predictive Maintenance Dashboard is a React-based web application that provides real-time monitoring of industrial asset health. Built with modern glassmorphism design, it offers operators and engineers a comprehensive view of sensor data, anomaly detection, and system health.
+
+## Live Demo
+
+The dashboard is deployed on **Vercel** and accessible at:
+
+<Card title="Production Dashboard" icon="globe" href="https://predictive-maintenance-ten.vercel.app/">
+  Live monitoring dashboard with real-time updates from the Render-hosted backend
+</Card>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Real-Time Updates" icon="bolt">
+    3-second polling interval fetches latest sensor data, health scores, and anomaly status
+  </Card>
+  
+  <Card title="Glassmorphism Design" icon="sparkles">
+    Modern dark theme with frosted glass cards, smooth animations, and color-coded risk levels
+  </Card>
+  
+  <Card title="STATUS: LIVE Badge" icon="circle-check">
+    Green indicator in the header confirms active backend connection and data streaming
+  </Card>
+  
+  <Card title="60-Second Buffer" icon="clock">
+    Streaming chart displays a sliding 60-second window of sensor telemetry with fixed Y-axis domains
+  </Card>
+</CardGroup>
+
+## Dashboard Layout
+
+The interface is divided into two columns:
+
+### Left Column (Data Visualization)
+
+- **System Control Panel** — State management and demo lifecycle controls
+- **Status Cards** (4 across) — Health Score, Vibration, Voltage, Current with baseline targets
+- **Streaming Chart** — Multi-signal telemetry with anomaly shading
+- **Log Watcher** — Real-time event feed with state machine transitions
+
+### Right Column (Analysis & Controls)
+
+- **Health Summary** — Health score ring (0-100) with color-coded risk level
+- **Insight Panel** — Batch-feature explanations for anomalies
+- **Operator Log** — Maintenance event logging form
+- **Performance Card** — ML model validation metrics
+- **Download Reports** — PDF and Excel export buttons
+- **What-If Analysis** — Sandbox modal for scenario testing
+
+## Connection Status
+
+<Info>
+The **STATUS: LIVE** badge in the header turns green when the backend health check (`/health`) succeeds. If the backend is unreachable, the badge turns gray and displays "OFFLINE".
+</Info>
+
+## Keep-Alive Heartbeat
+
+To prevent Render Free Tier cold starts, the dashboard automatically pings the backend every **10 minutes** via the `/ping` endpoint. This ensures the backend container stays warm and responsive.
+
+```javascript
+const KEEPALIVE_INTERVAL = 10 * 60 * 1000  // 10 minutes
+```
+
+## Technology Stack
+
+| Component | Technology |
+|-----------|------------|
+| **Framework** | React 18 + Vite |
+| **Charting** | Recharts |
+| **Styling** | CSS Modules |
+| **Deployment** | Vercel |
+| **Backend** | FastAPI on Render |
+
+## Deployment
+
+The frontend is deployed to Vercel with automatic proxy routing to the backend:
+
+<Tabs>
+  <Tab title="Vercel Configuration">
+    ```json
+    {
+      "rewrites": [
+        {
+          "source": "/api/:path*",
+          "destination": "https://predictive-maintenance-uhlb.onrender.com/api/:path*"
+        },
+        {
+          "source": "/health",
+          "destination": "https://predictive-maintenance-uhlb.onrender.com/health"
+        },
+        {
+          "source": "/ping",
+          "destination": "https://predictive-maintenance-uhlb.onrender.com/ping"
+        }
+      ]
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Environment Variables">
+    Set in Vercel dashboard:
+    
+    ```bash
+    VITE_API_URL=https://predictive-maintenance-uhlb.onrender.com
+    ```
+  </Tab>
+</Tabs>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Metrics Display" icon="chart-line" href="/dashboard/metrics">
+    Learn about the sensor metrics and health scoring system
+  </Card>
+  
+  <Card title="System Controls" icon="sliders" href="/dashboard/controls">
+    Explore calibration, fault injection, and system reset features
+  </Card>
+  
+  <Card title="Operator Logs" icon="clipboard" href="/dashboard/operator-logs">
+    Understand maintenance event logging for ML training
+  </Card>
+</CardGroup>

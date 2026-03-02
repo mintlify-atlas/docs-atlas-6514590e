@@ -1,0 +1,151 @@
+---
+title: Analyst Excel workbook
+description: Generate multi-sheet Excel workbook with Summary, Operator Logs, and Raw Sensor Data
+---
+
+## GET /api/v1/report/{asset_id}?format=xlsx
+
+Generate a comprehensive Excel workbook for data analysts with multiple sheets containing summary metrics, operator logs, and raw sensor data.
+
+### Path Parameters
+
+<ParamField path="asset_id" type="string" required>
+  Asset identifier (e.g., `Motor-01`)
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="format" type="string" required>
+  Must be `xlsx`
+</ParamField>
+
+### Response
+
+Returns an Excel (.xlsx) file download with 3 sheets:
+
+1. **Summary Sheet**: Health metrics and risk assessment
+2. **Operator Logs Sheet**: Maintenance event history
+3. **Sensor Data Sheet**: Raw time-series sensor readings
+
+### Example
+
+```bash cURL
+curl -X GET "https://predictive-maintenance-uhlb.onrender.com/api/v1/report/Motor-01?format=xlsx" \
+  -H "Accept: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" \
+  --output motor01-data.xlsx
+```
+
+```python Python
+import requests
+import pandas as pd
+
+response = requests.get(
+    "https://predictive-maintenance-uhlb.onrender.com/api/v1/report/Motor-01",
+    params={"format": "xlsx"}
+)
+
+with open("motor01-data.xlsx", "wb") as f:
+    f.write(response.content)
+
+# Read with pandas
+summary = pd.read_excel("motor01-data.xlsx", sheet_name="Summary")
+logs = pd.read_excel("motor01-data.xlsx", sheet_name="Operator Logs")
+sensor_data = pd.read_excel("motor01-data.xlsx", sheet_name="Sensor Data")
+```
+
+### File Naming
+
+Downloaded files follow the pattern:
+```
+health-report_{asset_id}_{timestamp}.xlsx
+```
+
+Example: `health-report_Motor-01_2026-03-02T10-30-00Z.xlsx`
+
+## Workbook Contents
+
+### Sheet 1: Summary
+
+| Column | Description |
+|--------|-------------|
+| `Asset ID` | Asset identifier |
+| `Timestamp` | Report generation time |
+| `Health Score` | 0-100 health score |
+| `Risk Level` | LOW/MODERATE/HIGH/CRITICAL |
+| `Degradation Index` | Cumulative damage (0.0-1.0) |
+| `Damage Rate` | DI change per hour |
+| `RUL (hours)` | Remaining useful life estimate |
+| `Maintenance Window` | Days until service recommended |
+| `Anomaly Batches` | Lifetime count of anomalous 1s windows |
+
+### Sheet 2: Operator Logs
+
+| Column | Description |
+|--------|-------------|
+| `Timestamp` | Event timestamp |
+| `Event Type` | Maintenance activity type |
+| `Severity` | LOW/MEDIUM/HIGH/CRITICAL |
+| `Description` | Free-text event description |
+| `Operator Name` | Person who logged the event |
+
+Includes all operator logs retrieved from `GET /api/logs?hours=24`.
+
+<Info>
+  If no operator logs exist for the asset, this sheet will be empty with headers only.
+</Info>
+
+### Sheet 3: Sensor Data
+
+| Column | Description |
+|--------|-------------|
+| `Timestamp` | Measurement timestamp (ISO 8601) |
+| `Voltage (V)` | Voltage in volts |
+| `Current (A)` | Current in amperes |
+| `Power Factor` | Power factor (0-1) |
+| `Vibration (g)` | Vibration in g-force |
+| `Power (kW)` | Computed power in kilowatts |
+| `Anomaly Score` | ML model output (0.0=Normal, 1.0=Anomalous) |
+
+Includes recent sensor history (last 60 seconds by default).
+
+<Warning>
+  Large time ranges can produce very large Excel files. The Sensor Data sheet is limited to recent history to keep file sizes manageable (typically {"<"}1 MB).
+</Warning>
+
+### Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Trend Analysis" icon="chart-line">
+    Import into Python/R for statistical analysis
+  </Card>
+  <Card title="Correlation Studies" icon="diagram-project">
+    Cross-reference operator logs with sensor anomalies
+  </Card>
+  <Card title="Compliance Audits" icon="file-check">
+    Provide raw data for regulatory reviews
+  </Card>
+  <Card title="ML Training" icon="brain">
+    Export labeled data for supervised learning
+  </Card>
+</CardGroup>
+
+### Status Codes
+
+- `200` - Workbook generated successfully
+- `404` - Asset not found or no health data available
+- `503` - Excel generation failed
+
+<Tip>
+  Open the file in Excel, LibreOffice Calc, or Google Sheets for interactive filtering and pivot tables. All sheets include headers for easy analysis.
+</Tip>
+
+### Related Endpoints
+
+<CardGroup cols={2}>
+  <Card title="Executive PDF" icon="file-pdf" href="/api/reports/executive-pdf">
+    1-page summary for managers
+  </Card>
+  <Card title="Industrial PDF" icon="certificate" href="/api/reports/industrial-pdf">
+    5-page technical certificate
+  </Card>
+</CardGroup>

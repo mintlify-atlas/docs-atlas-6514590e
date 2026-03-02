@@ -1,0 +1,335 @@
+---
+title: Data Generator
+description: Generate synthetic sensor data for testing the Predictive Maintenance system
+---
+
+The data generator is a CLI tool that simulates realistic sensor data from industrial assets like motors, pumps, and compressors. It supports both healthy and faulty operation modes for comprehensive testing.
+
+## Overview
+
+The generator creates synthetic sensor readings and sends them to the `/api/v1/data/simple` ingest endpoint. This is useful for:
+
+- Testing anomaly detection models
+- Calibrating baseline thresholds
+- Demonstrating fault scenarios
+- Load testing the ingestion pipeline
+
+## Basic Usage
+
+<Steps>
+  <Step title="Start the backend server">
+    Ensure the FastAPI backend is running before generating data:
+    
+    ```bash
+    uvicorn backend.api.main:app --reload
+    ```
+    
+    The generator will POST to `http://localhost:8000/api/v1/data/simple` by default.
+  </Step>
+
+  <Step title="Run the generator">
+    Execute the script from the project root:
+    
+    ```bash
+    python scripts/generate_data.py --asset_id motor_01 --duration 60 --healthy
+    ```
+  </Step>
+
+  <Step title="Verify data ingestion">
+    Check the terminal output for successful events:
+    
+    ```
+    [OK] Sent event 3f5a8b2c... | V=230.5V, I=15.2A, PF=0.92, Vib=0.150g
+    ```
+  </Step>
+</Steps>
+
+## Command-Line Arguments
+
+### Asset Identification
+
+```bash
+--asset_id, -a <string>
+```
+
+Unique identifier for the asset being simulated.
+
+- **Default:** `Motor-01`
+- **Example:** `motor_01`, `pump_alpha`, `compressor_3`
+
+```bash
+python scripts/generate_data.py --asset_id pump_alpha
+```
+
+### Duration
+
+```bash
+--duration, -d <seconds>
+```
+
+How long to run the generator (in seconds).
+
+- **Default:** `60`
+- **Range:** Any positive integer
+
+```bash
+python scripts/generate_data.py --duration 300  # Run for 5 minutes
+```
+
+### Interval
+
+```bash
+--interval, -i <seconds>
+```
+
+Time between consecutive sensor readings.
+
+- **Default:** `1.0` (1 second)
+- **Range:** Any positive float
+
+```bash
+python scripts/generate_data.py --interval 0.5  # 2 readings per second
+```
+
+### Operating Mode
+
+#### Healthy Mode (Normal Operation)
+
+```bash
+--healthy
+```
+
+Generates normal operating sensor values:
+
+- **Voltage:** 230V ± 3V (Indian Grid standard)
+- **Current:** 15A ± 1A
+- **Power Factor:** 0.88 - 0.95 (good efficiency)
+- **Vibration:** 0.15g ± 0.02g (low vibration)
+
+```bash
+python scripts/generate_data.py --healthy --duration 120
+```
+
+#### Faulty Mode (Anomalous Operation)
+
+```bash
+--faulty, -f
+```
+
+Injects extreme anomalies to force CRITICAL risk states. Fault types include:
+
+<CardGroup cols={2}>
+  <Card title="Voltage Spike" icon="bolt">
+    320V ± 20V (+90V from normal)
+  </Card>
+  
+  <Card title="Vibration Drift" icon="wave-square">
+    3.0g ± 0.5g (20x normal levels)
+  </Card>
+  
+  <Card title="Power Factor Drop" icon="arrow-down">
+    0.35 - 0.50 (severe degradation)
+  </Card>
+  
+  <Card title="Catastrophic Failure" icon="triangle-exclamation">
+    All signals fail simultaneously
+  </Card>
+</CardGroup>
+
+```bash
+python scripts/generate_data.py --faulty --duration 30
+```
+
+<Warning>
+  The `--healthy` flag **overrides** `--faulty` if both are specified. This ensures explicit control over the operation mode.
+</Warning>
+
+## Output Format
+
+### Payload Structure
+
+Each event is sent as a JSON payload to the `/api/v1/data/simple` endpoint:
+
+```json
+{
+  "asset_id": "motor_01",
+  "voltage_v": 230.5,
+  "current_a": 15.2,
+  "power_factor": 0.92,
+  "vibration_g": 0.1523,
+  "is_faulty": false
+}
+```
+
+### Console Output
+
+Successful events display real-time metrics:
+
+```
+============================================================
+PREDICTIVE MAINTENANCE - DATA GENERATOR
+============================================================
+Asset ID:   motor_01
+Duration:   60 seconds
+Interval:   1.0 seconds
+Mode:       HEALTHY (normal operation)
+Endpoint:   http://localhost:8000/api/v1/data/simple
+============================================================
+
+[OK] Sent event 3f5a8b2c... | V=230.5V, I=15.2A, PF=0.92, Vib=0.150g
+[OK] Sent event 7a9c4d1e... | V=229.8V, I=14.9A, PF=0.91, Vib=0.148g
+[OK] Sent event 2b8f3a5d... | V=231.2V, I=15.4A, PF=0.93, Vib=0.152g
+
+============================================================
+[COMPLETE] Sent 60 events, 0 failed
+============================================================
+```
+
+Faulty events are marked with `[FAULT]`:
+
+```
+[OK] Sent event 4e7c9a2b... | V=315.2V, I=15.1A, PF=0.91, Vib=2.850g [FAULT]
+```
+
+## Common Recipes
+
+### Initial System Calibration
+
+Generate 5 minutes of healthy data for baseline training:
+
+```bash
+python scripts/generate_data.py \
+  --asset_id motor_01 \
+  --duration 300 \
+  --interval 1.0 \
+  --healthy
+```
+
+### Fault Scenario Testing
+
+Simulate a brief fault condition:
+
+```bash
+python scripts/generate_data.py \
+  --asset_id motor_01 \
+  --duration 10 \
+  --interval 0.5 \
+  --faulty
+```
+
+### High-Frequency Monitoring
+
+Generate data at 10Hz (100ms intervals) for stress testing:
+
+```bash
+python scripts/generate_data.py \
+  --asset_id motor_01 \
+  --duration 60 \
+  --interval 0.1 \
+  --healthy
+```
+
+### Multi-Asset Simulation
+
+Run multiple generators in parallel (separate terminals):
+
+```bash
+# Terminal 1 - Motor
+python scripts/generate_data.py --asset_id motor_01 --healthy
+
+# Terminal 2 - Pump
+python scripts/generate_data.py --asset_id pump_alpha --healthy
+
+# Terminal 3 - Compressor
+python scripts/generate_data.py --asset_id compressor_3 --faulty
+```
+
+## Environment Configuration
+
+### Custom API Endpoint
+
+Override the default API URL using an environment variable:
+
+<CodeGroup>
+```bash Linux/Mac
+export API_URL=https://predictive-maintenance-uhlb.onrender.com
+python scripts/generate_data.py --asset_id motor_01 --healthy
+```
+
+```powershell Windows (PowerShell)
+$env:API_URL = "https://predictive-maintenance-uhlb.onrender.com"
+python scripts/generate_data.py --asset_id motor_01 --healthy
+```
+
+```cmd Windows (CMD)
+set API_URL=https://predictive-maintenance-uhlb.onrender.com
+python scripts/generate_data.py --asset_id motor_01 --healthy
+```
+</CodeGroup>
+
+### Connection Error Handling
+
+If the backend is not running, you'll see:
+
+```
+[ERROR] Cannot connect to http://localhost:8000/api/v1/data/simple
+        Make sure the backend is running: uvicorn backend.api.main:app
+```
+
+<Tip>
+  Use `Ctrl+C` to gracefully stop the generator. It will display a summary of events sent and failed.
+</Tip>
+
+## Advanced Usage
+
+### Programmatic Integration
+
+You can import and use the generator functions in your own scripts:
+
+```python
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from scripts.generate_data import generate_healthy_reading, send_event
+
+# Generate a single healthy reading
+data = generate_healthy_reading()
+print(data)
+# {'voltage_v': 230.5, 'current_a': 15.2, 'power_factor': 0.92, 'vibration_g': 0.15}
+
+# Send to API
+send_event(asset_id="motor_01", sensor_data=data, is_faulty=False)
+```
+
+## Troubleshooting
+
+### HTTP 503 Service Unavailable
+
+**Cause:** Backend is starting up (Render free-tier cold start).
+
+**Solution:** Wait 30-60 seconds and retry. The frontend's `/ping` heartbeat prevents this in production.
+
+### HTTP 422 Unprocessable Entity
+
+**Cause:** Invalid payload schema.
+
+**Solution:** Ensure all required fields are present: `asset_id`, `voltage_v`, `current_a`, `power_factor`, `vibration_g`.
+
+### Data Not Appearing in Dashboard
+
+1. **Check InfluxDB connection:** Visit `/health` endpoint
+2. **Verify bucket name:** Ensure `INFLUX_BUCKET=sensor_data` matches your configuration
+3. **Inspect API logs:** Look for ingestion errors in the backend console
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Calibration Workflow" icon="gauge" href="/guides/calibration-workflow">
+    Use generated data to calibrate baseline models
+  </Card>
+  
+  <Card title="API Reference" icon="code" href="/api-reference/ingest">
+    Learn about the /ingest endpoint schema
+  </Card>
+</CardGroup>

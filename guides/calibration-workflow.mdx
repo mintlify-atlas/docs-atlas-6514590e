@@ -1,0 +1,625 @@
+---
+title: Calibration Workflow
+description: Step-by-step guide to calibrating the Predictive Maintenance system for production use
+---
+
+Before the system can detect anomalies, it must learn what "healthy" operation looks like. This process is called **baseline calibration** and is critical for accurate anomaly detection.
+
+## Overview
+
+The calibration workflow involves:
+
+1. **Generating healthy sensor data** using the data generator
+2. **Starting calibration mode** via the API to train ML models
+3. **Verifying baseline thresholds** using the dashboard
+4. **Transitioning to production monitoring** for real-time anomaly detection
+
+<Warning>
+  The system must be in **IDLE** state before calibration. Use the **Purge & Re-Calibrate** button in the dashboard if you need to reset.
+</Warning>
+
+## Prerequisites
+
+<Steps>
+  <Step title="Backend running">
+    Ensure the FastAPI backend is operational:
+    
+    ```bash
+    uvicorn backend.api.main:app --reload
+    ```
+    
+    Verify at [http://localhost:8000/health](http://localhost:8000/health)
+  </Step>
+
+  <Step title="InfluxDB configured">
+    Confirm database connectivity with valid credentials:
+    
+    - `INFLUX_URL`
+    - `INFLUX_TOKEN`
+    - `INFLUX_ORG`
+    - `INFLUX_BUCKET=sensor_data`
+    
+    See [InfluxDB Setup](/guides/influxdb-setup) for configuration details.
+  </Step>
+
+  <Step title="System in IDLE state">
+    Check the system status in the dashboard or via API:
+    
+    ```bash
+    curl http://localhost:8000/api/v1/monitoring/status
+    ```
+    
+    Expected response:
+    ```json
+    {
+      "system_state": "IDLE",
+      "calibration_active": false
+    }
+    ```
+  </Step>
+</Steps>
+
+## Step 1: Generate Healthy Data
+
+The ML models need **at least 5 minutes** of healthy sensor data to establish a statistical baseline.
+
+<CodeGroup>
+```bash Standard Calibration (5 min)
+python scripts/generate_data.py \
+  --asset_id motor_01 \
+  --duration 300 \
+  --interval 1.0 \
+  --healthy
+```
+
+```bash Extended Calibration (10 min)
+python scripts/generate_data.py \
+  --asset_id motor_01 \
+  --duration 600 \
+  --interval 1.0 \
+  --healthy
+```
+
+```bash High-Frequency Calibration (5 min @ 10Hz)
+python scripts/generate_data.py \
+  --asset_id motor_01 \
+  --duration 300 \
+  --interval 0.1 \
+  --healthy
+```
+</CodeGroup>
+
+**What this does:**
+
+- Simulates normal motor operation (230V, 15A, 0.92 PF, 0.15g vibration)
+- Sends data to `/api/v1/data/simple` endpoint
+- Writes to InfluxDB `sensor_data` bucket
+
+<Tip>
+  **Recommended duration:** 5-10 minutes for robust statistics. Shorter durations ({"<"}2 minutes) may produce unreliable baselines due to insufficient data variance.
+</Tip>
+
+### Monitor Data Ingestion
+
+You should see console output like:
+
+```
+============================================================
+PREDICTIVE MAINTENANCE - DATA GENERATOR
+============================================================
+Asset ID:   motor_01
+Duration:   300 seconds
+Interval:   1.0 seconds
+Mode:       HEALTHY (normal operation)
+Endpoint:   http://localhost:8000/api/v1/data/simple
+============================================================
+
+[OK] Sent event 3f5a8b2c... | V=230.5V, I=15.2A, PF=0.92, Vib=0.150g
+[OK] Sent event 7a9c4d1e... | V=229.8V, I=14.9A, PF=0.91, Vib=0.148g
+...
+
+============================================================
+[COMPLETE] Sent 300 events, 0 failed
+============================================================
+```
+
+## Step 2: Start Calibration
+
+Once healthy data is in InfluxDB, trigger the calibration process:
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:8000/api/v1/calibration/start \
+  -H "Content-Type: application/json" \
+  -d '{"asset_id": "motor_01"}'
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    "http://localhost:8000/api/v1/calibration/start",
+    json={"asset_id": "motor_01"}
+)
+
+print(response.json())
+```
+
+```javascript JavaScript
+fetch('http://localhost:8000/api/v1/calibration/start', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ asset_id: 'motor_01' })
+})
+  .then(res => res.json())
+  .then(data => console.log(data));
+```
+</CodeGroup>
+
+**Expected response:**
+
+```json
+{
+  "status": "calibration_started",
+  "message": "Baseline calibration in progress",
+  "asset_id": "motor_01",
+  "data_points_collected": 300
+}
+```
+
+### What Happens During Calibration?
+
+<Steps>
+  <Step title="Query InfluxDB">
+    Fetch the last 5-10 minutes of sensor data for the specified `asset_id`.
+  </Step>
+
+  <Step title="Feature engineering">
+    Calculate 6 legacy features (1Hz) and 16 batch features (100Hz windows):
+    
+    - Voltage rolling mean (1-hour window)
+    - Current spike count (10-point window)
+    - Power factor efficiency score
+    - Vibration RMS intensity
+    - Voltage stability
+    - Power-vibration ratio
+    - **Batch features:** mean, std, peak-to-peak, RMS for all 4 signals
+  </Step>
+
+  <Step title="Baseline construction">
+    Compute statistical thresholds (mean, std, min, max) for each feature.
+    
+    **Example baseline:**
+    ```json
+    {
+      "voltage_rolling_mean_1h": {"mean": 230.2, "std": 2.8, "min": 224.1, "max": 236.5},
+      "vibration_intensity_rms": {"mean": 0.15, "std": 0.02, "min": 0.11, "max": 0.19}
+    }
+    ```
+  </Step>
+
+  <Step title="Train Isolation Forest models">
+    Two models are trained:
+    
+    - **Legacy model (v2):** 6 features, 1Hz data, F1=78.1%
+    - **Batch model (v3):** 16 features, 100Hz windows, F1=99.6%
+    
+    Both use `contamination=0.02` (2% outlier assumption).
+  </Step>
+
+  <Step title="Validate baseline">
+    Apply 3-sigma rule to detect extreme outliers in calibration data.
+    
+    <Warning>
+      If >5% of calibration data is flagged as anomalous, the baseline is **rejected**. This indicates contaminated training data (faulty sensor readings mixed in).
+    </Warning>
+  </Step>
+
+  <Step title="Save models">
+    Persist trained models to disk:
+    
+    - `backend/models/isolation_forest_model.pkl` (legacy)
+    - `backend/models/batch_isolation_forest_model.pkl` (batch)
+    - `backend/models/baseline.json` (thresholds)
+  </Step>
+</Steps>
+
+### Calibration Duration
+
+- **Small datasets ({"<"}300 points):** ~5-10 seconds
+- **Medium datasets (300-1000 points):** ~10-20 seconds
+- **Large datasets (>1000 points):** ~30-60 seconds
+
+<Tip>
+  The backend logs calibration progress. Check the console for messages like:
+  
+  ```
+  [INFO] Starting baseline calibration for motor_01
+  [INFO] Collected 300 data points from InfluxDB
+  [INFO] Computed 6 legacy features and 16 batch features
+  [INFO] Training Isolation Forest models...
+  [INFO] Baseline validation passed: 2.1% outliers (threshold: 5%)
+  [INFO] Models saved to backend/models/
+  [SUCCESS] Calibration complete for motor_01
+  ```
+</Tip>
+
+## Step 3: Verify Baseline
+
+### Check System Status
+
+Confirm the system transitioned to **CALIBRATED** state:
+
+```bash
+curl http://localhost:8000/api/v1/monitoring/status
+```
+
+**Expected response:**
+
+```json
+{
+  "system_state": "CALIBRATED",
+  "calibration_active": false,
+  "baseline_established": true,
+  "models_loaded": {
+    "legacy_model": true,
+    "batch_model": true
+  },
+  "baseline_summary": {
+    "voltage_mean": 230.2,
+    "current_mean": 15.1,
+    "power_factor_mean": 0.92,
+    "vibration_mean": 0.15
+  }
+}
+```
+
+### Dashboard Verification
+
+Open the frontend at [http://localhost:5173](http://localhost:5173) and check:
+
+<Steps>
+  <Step title="Status cards show baseline targets">
+    Each metric card displays:
+    
+    - **Live reading** (current value)
+    - **Baseline target** (calibrated mean)
+    
+    Example:
+    ```
+    Voltage: 230.5V
+    Target: 230.2V ±2.8V
+    ```
+  </Step>
+
+  <Step title="Health score is 100">
+    The health ring should show:
+    
+    - **Score:** 100 / 100
+    - **Risk:** LOW
+    - **Color:** Green
+  </Step>
+
+  <Step title="No anomaly markers">
+    The signal chart should have **no red dashed lines** or shaded regions (since we're still in healthy operation).
+  </Step>
+
+  <Step title="Insight panel is empty">
+    No anomaly explanations should appear (e.g., "High vibration variance").
+  </Step>
+</Steps>
+
+### Query Baseline via API
+
+Retrieve the full baseline thresholds:
+
+```bash
+curl http://localhost:8000/api/v1/monitoring/baseline
+```
+
+**Response structure:**
+
+```json
+{
+  "baseline": {
+    "voltage_rolling_mean_1h": {"mean": 230.2, "std": 2.8, "min": 224.1, "max": 236.5},
+    "current_spike_count": {"mean": 0.3, "std": 0.5, "min": 0, "max": 2},
+    "power_factor_efficiency_score": {"mean": 86.5, "std": 4.2, "min": 78.0, "max": 95.0},
+    "vibration_intensity_rms": {"mean": 0.15, "std": 0.02, "min": 0.11, "max": 0.19},
+    "voltage_stability": {"mean": 2.1, "std": 1.8, "min": 0.1, "max": 6.5},
+    "power_vibration_ratio": {"mean": 0.16, "std": 0.03, "min": 0.11, "max": 0.21}
+  },
+  "batch_baseline": {
+    "voltage_mean": {"mean": 230.2, "std": 2.8},
+    "voltage_std": {"mean": 1.5, "std": 0.4},
+    "voltage_peak_to_peak": {"mean": 8.2, "std": 1.9},
+    "voltage_rms": {"mean": 230.3, "std": 2.7},
+    ...
+  }
+}
+```
+
+## Step 4: Transition to Production
+
+The system is now ready for real-time anomaly detection!
+
+### Enable Continuous Monitoring
+
+You have two options:
+
+#### Option A: Continue with Synthetic Data
+
+<CodeGroup>
+```bash Healthy Operation (60 sec)
+python scripts/generate_data.py \
+  --asset_id motor_01 \
+  --duration 60 \
+  --healthy
+```
+
+```bash Faulty Operation (30 sec)
+python scripts/generate_data.py \
+  --asset_id motor_01 \
+  --duration 30 \
+  --faulty
+```
+</CodeGroup>
+
+**What to observe:**
+
+- **Healthy data:** Health score stays near 100, risk remains LOW
+- **Faulty data:** Health score drops rapidly, red anomaly markers appear on chart
+
+#### Option B: Connect Real Hardware
+
+If you have physical sensors, integrate them using the `/api/v1/data/simple` endpoint:
+
+```python
+import requests
+from datetime import datetime, timezone
+
+# Read from your sensor (replace with actual GPIO/serial code)
+voltage = read_voltage_sensor()
+current = read_current_sensor()
+power_factor = read_pf_meter()
+vibration = read_accelerometer()
+
+# Send to API
+payload = {
+    "asset_id": "motor_01",
+    "voltage_v": voltage,
+    "current_a": current,
+    "power_factor": power_factor,
+    "vibration_g": vibration,
+    "is_faulty": False
+}
+
+response = requests.post(
+    "http://localhost:8000/api/v1/data/simple",
+    json=payload
+)
+```
+
+### Monitor Anomaly Detection
+
+Inject a fault to test the detection pipeline:
+
+```bash
+python scripts/generate_data.py \
+  --asset_id motor_01 \
+  --duration 10 \
+  --faulty
+```
+
+**Expected behavior:**
+
+1. **Dashboard updates** within 1-2 seconds
+2. **Health score drops** below 75 (MODERATE risk) or 50 (HIGH risk)
+3. **Red anomaly markers** appear on the signal chart
+4. **Insight panel populates** with explanations:
+   ```
+   High vibration variance: σ=0.17g (baseline: 0.02g)
+   Voltage spike detected: 315.2V (3.2σ above normal)
+   ```
+5. **Maintenance window** shortens to {"<"}1 day (CRITICAL) or ~4 days (HIGH)
+
+<Tip>
+  The batch model (F1=99.6%) is more sensitive to subtle faults like **Jitter** (normal mean, high variance). The legacy model (F1=78.1%) may miss these.
+</Tip>
+
+### Generate Reports
+
+Download health reports for stakeholders:
+
+<CardGroup cols={3}>
+  <Card title="Executive PDF" icon="file-pdf">
+    1-page summary with health grade (A-F)
+    
+    ```bash
+    curl -o report.pdf \
+      http://localhost:8000/api/v1/reports/executive?asset_id=motor_01
+    ```
+  </Card>
+  
+  <Card title="Multi-Sheet Excel" icon="file-excel">
+    Summary + Operator Logs + Raw Data
+    
+    ```bash
+    curl -o report.xlsx \
+      http://localhost:8000/api/v1/reports/excel?asset_id=motor_01
+    ```
+  </Card>
+  
+  <Card title="Industrial PDF" icon="file-certificate">
+    5-page technical report for engineers
+    
+    ```bash
+    curl -o industrial.pdf \
+      http://localhost:8000/api/v1/reports/industrial?asset_id=motor_01
+    ```
+  </Card>
+</CardGroup>
+
+## Re-Calibration
+
+You may need to re-calibrate if:
+
+- **Operating conditions change** (new load profile, voltage supply)
+- **Sensor drift** over time (recalibrate every 3-6 months)
+- **Equipment upgrade** (motor replacement, sensor replacement)
+- **False positive rate is too high** (baseline contaminated with faulty data)
+
+### Full System Reset
+
+<Steps>
+  <Step title="Purge all data">
+    Use the dashboard **Purge & Re-Calibrate** button or API:
+    
+    ```bash
+    curl -X POST http://localhost:8000/api/v1/system/purge
+    ```
+    
+    **What this does:**
+    - Deletes all InfluxDB data from `sensor_data` bucket
+    - Clears in-memory ML models and baselines
+    - Resets system state to IDLE
+    - Resets Degradation Index (DI) to 0.0
+  </Step>
+
+  <Step title="Re-run calibration workflow">
+    Follow steps 1-4 again:
+    
+    1. Generate healthy data (5-10 min)
+    2. Start calibration
+    3. Verify baseline
+    4. Resume monitoring
+  </Step>
+</Steps>
+
+<Warning>
+  **Purge is irreversible!** All historical data, operator logs, and trained models are permanently deleted. Export reports before purging if you need to preserve records.
+</Warning>
+
+### Incremental Re-Calibration (No Data Loss)
+
+If you want to retrain models without deleting data:
+
+```bash
+# Retrain using the last 10 minutes of data
+curl -X POST http://localhost:8000/api/v1/calibration/start \
+  -H "Content-Type: application/json" \
+  -d '{"asset_id": "motor_01", "lookback_minutes": 10}'
+```
+
+This updates the models while preserving historical records.
+
+## Advanced Workflows
+
+### Multi-Asset Calibration
+
+Calibrate multiple assets in parallel:
+
+```bash
+# Terminal 1 - Motor
+python scripts/generate_data.py --asset_id motor_01 --duration 300 --healthy
+curl -X POST http://localhost:8000/api/v1/calibration/start -d '{"asset_id": "motor_01"}'
+
+# Terminal 2 - Pump
+python scripts/generate_data.py --asset_id pump_alpha --duration 300 --healthy
+curl -X POST http://localhost:8000/api/v1/calibration/start -d '{"asset_id": "pump_alpha"}'
+```
+
+### Automated Calibration Script
+
+Combine data generation and calibration into a single script:
+
+```python
+import subprocess
+import time
+import requests
+
+# Step 1: Generate healthy data
+print("[1/3] Generating healthy data...")
+subprocess.run([
+    "python", "scripts/generate_data.py",
+    "--asset_id", "motor_01",
+    "--duration", "300",
+    "--healthy"
+])
+
+# Step 2: Wait for data to settle
+print("[2/3] Waiting for data to propagate...")
+time.sleep(5)
+
+# Step 3: Start calibration
+print("[3/3] Starting calibration...")
+response = requests.post(
+    "http://localhost:8000/api/v1/calibration/start",
+    json={"asset_id": "motor_01"}
+)
+
+if response.status_code == 200:
+    print("✅ Calibration complete!")
+    print(response.json())
+else:
+    print("❌ Calibration failed!")
+    print(response.text)
+```
+
+Save as `scripts/auto_calibrate.py` and run:
+
+```bash
+python scripts/auto_calibrate.py
+```
+
+## Troubleshooting
+
+### Error: "Insufficient data for calibration"
+
+**Cause:** Less than 100 data points in InfluxDB.
+
+**Solution:** Generate more healthy data (aim for 300+ points, ~5 minutes at 1Hz).
+
+### Error: "Baseline validation failed: 12% outliers"
+
+**Cause:** Calibration data contains faulty sensor readings.
+
+**Solution:**
+1. Purge the system
+2. Ensure sensors are operating normally
+3. Re-run calibration with `--healthy` flag (no `--faulty`)
+
+### Health score immediately drops after calibration
+
+**Cause:** Mismatch between calibration data and live data (different asset_id, operating conditions).
+
+**Solution:**
+- Verify `asset_id` matches in both data generation and API calls
+- Ensure sensors haven't changed between calibration and monitoring
+
+### Models not loading after restart
+
+**Cause:** Model files deleted or corrupted.
+
+**Solution:**
+```bash
+ls backend/models/
+# Should show:
+# - isolation_forest_model.pkl
+# - batch_isolation_forest_model.pkl
+# - baseline.json
+```
+
+If missing, re-run calibration to regenerate them.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="code" href="/api-reference/calibration">
+    Explore calibration endpoints and schemas
+  </Card>
+  
+  <Card title="Health Assessment" icon="heart-pulse" href="/architecture/health-assessment">
+    Learn how the system scores asset health
+  </Card>
+</CardGroup>

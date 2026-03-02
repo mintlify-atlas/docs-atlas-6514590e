@@ -1,0 +1,184 @@
+---
+title: Ingest sensor data
+description: POST /ingest endpoint for ingesting sensor events with validation and server-side computation
+---
+
+## POST /ingest
+
+Ingest a single sensor event with validation, server-side power computation, and persistence to InfluxDB.
+
+### Request
+
+<ParamField path="event_id" type="string" required>
+  UUID v4 identifier for the event
+</ParamField>
+
+<ParamField path="timestamp" type="string" required>
+  ISO 8601 timestamp (e.g., `2026-01-12T00:00:00Z`)
+</ParamField>
+
+<ParamField path="asset" type="object" required>
+  Asset information
+  
+  <Expandable title="properties">
+    <ParamField path="asset_id" type="string" required>
+      Unique asset identifier (e.g., `Motor-01`)
+    </ParamField>
+    
+    <ParamField path="asset_type" type="string" required>
+      Asset type: `motor`, `pump`, or `compressor`
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="signals" type="object" required>
+  Sensor measurements
+  
+  <Expandable title="properties">
+    <ParamField path="voltage_v" type="number" required>
+      Voltage in volts (150-300V)
+    </ParamField>
+    
+    <ParamField path="current_a" type="number" required>
+      Current in amperes (1-50A)
+    </ParamField>
+    
+    <ParamField path="power_factor" type="number" required>
+      Power factor (0.3-1.0)
+    </ParamField>
+    
+    <ParamField path="vibration_g" type="number" required>
+      Vibration in g-force (0.01-10.0g)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="context" type="object" required>
+  Operational context
+  
+  <Expandable title="properties">
+    <ParamField path="operating_state" type="string" required>
+      Current state: `RUNNING`, `IDLE`, `STARTING`, `STOPPING`
+    </ParamField>
+    
+    <ParamField path="source" type="string" required>
+      Data source identifier (e.g., `modbus_rtu`, `opc_ua`, `manual`)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Response
+
+<ResponseField name="status" type="string">
+  `accepted` if ingestion succeeded
+</ResponseField>
+
+<ResponseField name="event_id" type="string">
+  Echo of the request event_id
+</ResponseField>
+
+<ResponseField name="timestamp" type="string">
+  Echo of the request timestamp
+</ResponseField>
+
+<ResponseField name="signals" type="object">
+  Signals with computed power_kw
+  
+  <Expandable title="properties">
+    <ResponseField name="voltage_v" type="number">
+      Voltage in volts
+    </ResponseField>
+    
+    <ResponseField name="current_a" type="number">
+      Current in amperes
+    </ResponseField>
+    
+    <ResponseField name="power_factor" type="number">
+      Power factor
+    </ResponseField>
+    
+    <ResponseField name="vibration_g" type="number">
+      Vibration in g-force
+    </ResponseField>
+    
+    <ResponseField name="power_kw" type="number">
+      **Computed server-side**: `voltage_v × current_a × power_factor / 1000`
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Human-readable success message
+</ResponseField>
+
+### Example
+
+```bash cURL
+curl -X POST https://predictive-maintenance-uhlb.onrender.com/ingest \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event_id": "550e8400-e29b-41d4-a716-446655440000",
+    "timestamp": "2026-03-02T10:30:00Z",
+    "asset": {
+      "asset_id": "Motor-01",
+      "asset_type": "motor"
+    },
+    "signals": {
+      "voltage_v": 230.5,
+      "current_a": 12.3,
+      "power_factor": 0.92,
+      "vibration_g": 0.15
+    },
+    "context": {
+      "operating_state": "RUNNING",
+      "source": "modbus_rtu"
+    }
+  }'
+```
+
+```json Response
+{
+  "status": "accepted",
+  "event_id": "550e8400-e29b-41d4-a716-446655440000",
+  "timestamp": "2026-03-02T10:30:00Z",
+  "asset": {
+    "asset_id": "Motor-01",
+    "asset_type": "motor"
+  },
+  "signals": {
+    "voltage_v": 230.5,
+    "current_a": 12.3,
+    "power_factor": 0.92,
+    "vibration_g": 0.15,
+    "power_kw": 2.6048
+  },
+  "context": {
+    "operating_state": "RUNNING",
+    "source": "modbus_rtu"
+  },
+  "message": "Event ingested successfully"
+}
+```
+
+### Status Codes
+
+- `200` - Event ingested successfully
+- `422` - Validation error (invalid payload)
+- `503` - InfluxDB unavailable
+
+<Warning>
+  Do NOT include `power_kw` in the request. The server computes this field. If provided by the client, the request will be rejected with a 422 error.
+</Warning>
+
+## Server-Side Processing
+
+When you POST to `/ingest`, the backend:
+
+1. **Validates** all fields against schemas
+2. **Computes** `power_kw = voltage_v × current_a × power_factor / 1000`
+3. **Persists** to InfluxDB `sensor_data` measurement
+4. **Triggers** feature engineering (rolling means, spike detection)
+5. **Runs** anomaly detection if baseline exists
+6. **Updates** Cumulative Degradation Index (DI)
+
+See [Sensor Ingestion](/features/sensor-ingestion) for the complete data flow.

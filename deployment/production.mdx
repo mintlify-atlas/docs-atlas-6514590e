@@ -1,0 +1,572 @@
+---
+title: Production Deployment
+description: Deploy the Predictive Maintenance System to production on Render, Vercel, and InfluxDB Cloud
+---
+
+Deploy the Predictive Maintenance System to production cloud platforms with automatic scaling, monitoring, and high availability.
+
+## Architecture Overview
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   Frontend      │     │   Backend       │     │   Database      │
+│   (Vercel)      │────▶│   (Render)      │────▶│ (InfluxDB Cloud)│
+│   React + Vite  │     │   FastAPI       │     │   Time-Series   │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+```
+
+| Component | Technology | Hosting | Status |
+|-----------|------------|---------|--------|
+| Frontend | React 18 + Vite | Vercel | ✅ Live |
+| Backend | FastAPI + Docker | Render | ✅ Live |
+| Database | InfluxDB 2.x | InfluxDB Cloud | ✅ Live |
+
+## Live Deployment
+
+| Service | URL |
+|---------|-----|
+| **Frontend** | https://predictive-maintenance-ten.vercel.app/ |
+| **Backend API** | https://predictive-maintenance-uhlb.onrender.com |
+| **API Docs** | https://predictive-maintenance-uhlb.onrender.com/docs |
+| **Health Check** | https://predictive-maintenance-uhlb.onrender.com/health |
+
+## InfluxDB Cloud Setup
+
+Set up the time-series database for sensor data storage.
+
+<Steps>
+  <Step title="Create InfluxDB Cloud account">
+    1. Go to [InfluxDB Cloud](https://cloud2.influxdata.com)
+    2. Sign up for a free account
+    3. Select **AWS us-east-1** region (recommended)
+  </Step>
+
+  <Step title="Create a bucket">
+    1. Navigate to **Load Data → Buckets**
+    2. Click **Create Bucket**
+    3. Name: `sensor_data`
+    4. Retention: **30 days** (adjust as needed)
+  </Step>
+
+  <Step title="Generate API token">
+    1. Navigate to **Load Data → API Tokens**
+    2. Click **Generate API Token → Read/Write Token**
+    3. Grant permissions:
+       - **Read** access to `sensor_data` bucket
+       - **Write** access to `sensor_data` bucket
+    4. Save the token securely (you won't see it again)
+  </Step>
+
+  <Step title="Note your credentials">
+    Copy these values for later use:
+    
+    - **URL**: `https://us-east-1-1.aws.cloud2.influxdata.com`
+    - **Organization ID**: Found under **User → About**
+    - **Bucket**: `sensor_data`
+    - **Token**: The token you generated
+  </Step>
+</Steps>
+
+## Backend Deployment (Render)
+
+Deploy the FastAPI backend as a Docker container on Render.
+
+<Steps>
+  <Step title="Create Render account">
+    1. Go to [Render](https://render.com)
+    2. Sign up or log in with GitHub
+  </Step>
+
+  <Step title="Create new Web Service">
+    1. Click **New → Web Service**
+    2. Connect your GitHub repository
+    3. Select the repository: `PREDICTIVE-MAINTENANCE`
+  </Step>
+
+  <Step title="Configure service settings">
+    Set the following configuration:
+    
+    | Field | Value |
+    |-------|-------|
+    | **Name** | `predictive-maintenance-backend` |
+    | **Region** | Oregon (US West) or closest to you |
+    | **Branch** | `main` |
+    | **Root Directory** | `backend` |
+    | **Environment** | Docker |
+    | **Dockerfile Path** | `backend/Dockerfile` |
+    | **Instance Type** | Free (or paid for production) |
+  </Step>
+
+  <Step title="Add environment variables">
+    In the **Environment** section, add:
+    
+    ```env
+    ENVIRONMENT=production
+    PORT=8000
+    INFLUX_URL=https://us-east-1-1.aws.cloud2.influxdata.com
+    INFLUX_TOKEN=<your-influxdb-token>
+    INFLUX_ORG=<your-org-id>
+    INFLUX_BUCKET=sensor_data
+    ```
+    
+    <Warning>
+    Keep `INFLUX_TOKEN` secure. Never commit it to version control.
+    </Warning>
+  </Step>
+
+  <Step title="Deploy">
+    1. Click **Create Web Service**
+    2. Render will automatically:
+       - Build the Docker image from `backend/Dockerfile`
+       - Deploy the container
+       - Assign a URL: `https://your-service.onrender.com`
+    3. Monitor logs for successful startup
+  </Step>
+
+  <Step title="Verify deployment">
+    Test the health endpoint:
+    
+    ```bash
+    curl https://your-service.onrender.com/health
+    ```
+    
+    Expected response:
+    ```json
+    {
+      "status": "healthy",
+      "db_connected": true
+    }
+    ```
+  </Step>
+</Steps>
+
+### Render Cold Starts
+
+<Warning>
+Render free tier services spin down after 15 minutes of inactivity. First request after idle may take 30-60 seconds.
+</Warning>
+
+The frontend automatically sends a 10-minute keep-alive ping to `/ping` to prevent cold starts during active browser sessions.
+
+## Frontend Deployment (Vercel)
+
+Deploy the React dashboard to Vercel with automatic HTTPS and global CDN.
+
+<Steps>
+  <Step title="Create Vercel account">
+    1. Go to [Vercel](https://vercel.com)
+    2. Sign up with GitHub
+  </Step>
+
+  <Step title="Import repository">
+    1. Click **Add New → Project**
+    2. Import your GitHub repository: `PREDICTIVE-MAINTENANCE`
+  </Step>
+
+  <Step title="Configure build settings">
+    Set the following configuration:
+    
+    | Field | Value |
+    |-------|-------|
+    | **Framework Preset** | Vite |
+    | **Root Directory** | `frontend` |
+    | **Build Command** | `npm run build` |
+    | **Output Directory** | `dist` |
+    | **Install Command** | `npm install` |
+  </Step>
+
+  <Step title="Add environment variables (optional)">
+    In **Settings → Environment Variables**, add:
+    
+    ```env
+    VITE_API_URL=https://your-backend.onrender.com
+    ```
+    
+    <Note>
+    This is optional if you're using Vercel rewrites (recommended approach).
+    </Note>
+  </Step>
+
+  <Step title="Configure API rewrites">
+    The `frontend/vercel.json` file handles API proxying:
+    
+    ```json
+    {
+      "rewrites": [
+        {
+          "source": "/api/:path*",
+          "destination": "https://predictive-maintenance-uhlb.onrender.com/api/:path*"
+        },
+        {
+          "source": "/system/:path*",
+          "destination": "https://predictive-maintenance-uhlb.onrender.com/system/:path*"
+        },
+        {
+          "source": "/health",
+          "destination": "https://predictive-maintenance-uhlb.onrender.com/health"
+        },
+        {
+          "source": "/ping",
+          "destination": "https://predictive-maintenance-uhlb.onrender.com/ping"
+        }
+      ]
+    }
+    ```
+    
+    **Update the `destination` URLs** to match your Render backend URL.
+  </Step>
+
+  <Step title="Deploy">
+    1. Click **Deploy**
+    2. Vercel will:
+       - Install dependencies
+       - Build the React app
+       - Deploy to global CDN
+       - Assign a URL: `https://your-project.vercel.app`
+    3. Automatic deployments trigger on every push to `main`
+  </Step>
+
+  <Step title="Test the deployment">
+    1. Open your Vercel URL
+    2. Verify the dashboard loads
+    3. Check browser DevTools Network tab
+    4. Ensure API calls proxy to Render backend
+  </Step>
+</Steps>
+
+### Custom Domain (Optional)
+
+<Steps>
+  <Step title="Add domain in Vercel">
+    1. Go to **Settings → Domains**
+    2. Add your custom domain (e.g., `pm.yourcompany.com`)
+  </Step>
+
+  <Step title="Update DNS">
+    Add these DNS records at your domain provider:
+    
+    | Type | Name | Value |
+    |------|------|-------|
+    | A | pm | 76.76.21.21 |
+    | CNAME | pm | cname.vercel-dns.com |
+  </Step>
+
+  <Step title="Wait for verification">
+    Vercel will automatically provision SSL certificates via Let's Encrypt.
+  </Step>
+</Steps>
+
+## Systemd Deployment (Linux Servers)
+
+For bare-metal Linux servers, use the systemd service for process management.
+
+<Steps>
+  <Step title="Run setup script">
+    The automated setup script installs dependencies and configures systemd:
+    
+    ```bash
+    sudo ./scripts/setup_linux.sh
+    ```
+    
+    This script:
+    - Installs Python 3.11+, pip, venv
+    - Creates `/opt/predictive-maintenance` directory
+    - Sets up Python virtual environment
+    - Installs backend dependencies
+    - Configures systemd service
+    - Starts the service automatically
+  </Step>
+
+  <Step title="Verify service status">
+    ```bash
+    sudo systemctl status predictive-maintenance
+    ```
+    
+    Expected output:
+    ```
+    ● predictive-maintenance.service - Predictive Maintenance Backend API
+       Loaded: loaded (/etc/systemd/system/predictive-maintenance.service)
+       Active: active (running) since Mon 2026-03-02 12:00:00 UTC
+    ```
+  </Step>
+
+  <Step title="Manage the service">
+    <CodeGroup>
+    
+    ```bash Start
+    sudo systemctl start predictive-maintenance
+    ```
+    
+    ```bash Stop
+    sudo systemctl stop predictive-maintenance
+    ```
+    
+    ```bash Restart
+    sudo systemctl restart predictive-maintenance
+    ```
+    
+    ```bash View Logs
+    sudo journalctl -u predictive-maintenance -f
+    ```
+    
+    ```bash Enable Auto-Start
+    sudo systemctl enable predictive-maintenance
+    ```
+    
+    </CodeGroup>
+  </Step>
+</Steps>
+
+### Systemd Service Configuration
+
+The service is defined in `/etc/systemd/system/predictive-maintenance.service`:
+
+```ini
+[Unit]
+Description=Predictive Maintenance Backend API
+After=network.target influxdb.service
+Wants=influxdb.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/predictive-maintenance
+Environment="PATH=/opt/predictive-maintenance/venv/bin"
+Environment="PYTHONPATH=/opt/predictive-maintenance"
+ExecStart=/opt/predictive-maintenance/venv/bin/uvicorn backend.api.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Key features:**
+- `Restart=always` - Auto-restart on failure
+- `RestartSec=5` - Wait 5 seconds before restart
+- Logs to systemd journal
+- Starts after network is available
+
+## Environment Variables Reference
+
+### Backend (Render)
+
+| Variable | Required | Description | Example |
+|----------|----------|-------------|-------|
+| `ENVIRONMENT` | Yes | Runtime mode | `production` |
+| `PORT` | Yes | Server port | `8000` |
+| `INFLUX_URL` | Yes | InfluxDB Cloud URL | `https://us-east-1-1.aws.cloud2.influxdata.com` |
+| `INFLUX_TOKEN` | Yes | InfluxDB API token | `kg2i8Mq...` |
+| `INFLUX_ORG` | Yes | Organization ID | `67c4314d97304c09` |
+| `INFLUX_BUCKET` | Yes | Bucket name | `sensor_data` |
+
+### Frontend (Vercel)
+
+| Variable | Required | Description | Example |
+|----------|----------|-------------|-------|
+| `VITE_API_URL` | No | Backend URL (if not using rewrites) | `https://your-backend.onrender.com` |
+
+## Monitoring and Observability
+
+### Health Checks
+
+<CodeGroup>
+
+```bash Backend Health
+curl https://your-backend.onrender.com/health
+```
+
+```bash Database Connection
+curl https://your-backend.onrender.com/health | jq '.db_connected'
+```
+
+```bash System Status
+curl https://your-backend.onrender.com/system/status/Motor-01
+```
+
+</CodeGroup>
+
+### Logs
+
+**Render**: Access logs via dashboard → Service → Logs
+
+**Vercel**: View logs in dashboard → Project → Functions
+
+**InfluxDB**: Monitor queries at https://cloud2.influxdata.com
+
+**Systemd**: View logs with:
+```bash
+sudo journalctl -u predictive-maintenance -f --since "1 hour ago"
+```
+
+### Metrics
+
+InfluxDB Cloud provides built-in metrics:
+- Data points written per second
+- Query response time
+- Storage usage
+- API request rate
+
+## Troubleshooting
+
+### Backend 503 Errors
+
+**Problem**: Service unavailable on Render
+
+**Solution**: Check deployment logs for:
+- InfluxDB connection failures
+- Missing environment variables
+- ML model loading errors (lazy imports)
+
+```bash
+curl https://your-backend.onrender.com/health -v
+```
+
+### Frontend API Errors
+
+**Problem**: `Network Error` or CORS issues
+
+**Solution**: Verify Vercel rewrites are working:
+
+1. Check `frontend/vercel.json` destination URLs
+2. Inspect browser DevTools → Network tab
+3. Ensure requests to `/api/*` proxy to Render
+
+### InfluxDB Token Scope Issues
+
+**Problem**: `unauthorized access` errors
+
+**Solution**: Regenerate token with correct permissions:
+
+1. Go to InfluxDB Cloud → API Tokens
+2. Create new **Read/Write Token**
+3. Grant access to `sensor_data` bucket
+4. Update `INFLUX_TOKEN` in Render environment variables
+5. Restart the service
+
+### Degradation Index (DI) State Loss
+
+**Problem**: Health score resets after backend restart
+
+**Solution**: The system automatically hydrates DI from InfluxDB on startup via `|> last()`. If this fails:
+
+1. Check InfluxDB connection
+2. Verify `degradation_index` measurement exists
+3. Use `POST /system/purge` to explicitly reset DI to 0.0
+
+### Windows Binary Errors on Vercel
+
+**Problem**: Error 126 during build
+
+**Solution**: Remove `node_modules` from Git:
+
+```bash
+git rm -r --cached frontend/node_modules
+echo "node_modules/" >> frontend/.gitignore
+git commit -m "fix: remove node_modules from tracking"
+git push
+```
+
+Redeploy on Vercel.
+
+## Performance Optimization
+
+### Backend
+
+1. **Enable Gunicorn** for production (multi-worker):
+   ```bash
+   gunicorn backend.api.main:app -w 4 -k uvicorn.workers.UvicornWorker
+   ```
+
+2. **Cache ML models** in memory (already implemented)
+
+3. **Batch InfluxDB writes** for high-frequency data
+
+4. **Use connection pooling** for database clients
+
+### Frontend
+
+1. **Enable Vercel Edge Caching** for static assets
+
+2. **Lazy load components** using React.lazy()
+
+3. **Optimize chart rendering** with data sampling
+
+4. **Use service workers** for offline capability
+
+### Database
+
+1. **Downsample old data** using InfluxDB tasks:
+   ```flux
+   from(bucket: "sensor_data")
+     |> range(start: -30d)
+     |> aggregateWindow(every: 1h, fn: mean)
+     |> to(bucket: "sensor_data_downsampled")
+   ```
+
+2. **Set appropriate retention policies** (30 days for raw data)
+
+3. **Use continuous queries** for pre-aggregation
+
+## Security Best Practices
+
+<Warning>
+Always follow these security guidelines in production:
+</Warning>
+
+1. **Never commit secrets** to version control
+   - Use `.env` files locally
+   - Use platform environment variables in production
+
+2. **Rotate API tokens** regularly
+   - InfluxDB tokens every 90 days
+   - Backend service credentials quarterly
+
+3. **Enable CORS restrictions** in `backend/api/main.py`:
+   ```python
+   CORS_ORIGINS = [
+       "https://your-frontend.vercel.app",
+   ]
+   ```
+
+4. **Use HTTPS everywhere**
+   - Vercel provides automatic SSL
+   - Render provides automatic SSL
+   - InfluxDB Cloud enforces HTTPS
+
+5. **Implement rate limiting** using FastAPI middleware
+
+6. **Validate all inputs** with Pydantic schemas
+
+7. **Monitor for anomalous API usage** in logs
+
+## Scaling Considerations
+
+### Horizontal Scaling
+
+**Render**: Upgrade to paid plan for:
+- Auto-scaling based on CPU/memory
+- Multiple instances with load balancing
+- 99.9% uptime SLA
+
+**Vercel**: Automatic edge network scaling
+
+**InfluxDB Cloud**: Auto-scales with usage-based pricing
+
+### Vertical Scaling
+
+For high-frequency data (>1000 data points/sec):
+
+1. Upgrade Render instance type (2GB → 4GB RAM)
+2. Use InfluxDB Dedicated instances
+3. Implement data batching in backend
+
+## Next Steps
+
+- Review [API Reference](/api/authentication) for integration
+- Explore [Docker Deployment](/deployment/docker) for local testing
+- Check [Architecture](/architecture) for system design
+- Monitor your deployment with the built-in health dashboard

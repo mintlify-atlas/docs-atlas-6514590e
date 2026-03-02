@@ -1,0 +1,190 @@
+---
+title: 'Metrics & Health Scoring'
+description: 'Understanding the sensor metrics, health score ring, and baseline targets displayed in the dashboard'
+---
+
+The dashboard displays real-time sensor telemetry and derived health metrics to provide operators with instant visibility into asset condition.
+
+## Primary Sensor Metrics
+
+Four key metrics are displayed in the **Status Cards** row:
+
+<CardGroup cols={2}>
+  <Card title="Voltage (V)" icon="bolt">
+    AC voltage measured in volts. Baseline target: **230.0 V**
+  </Card>
+  
+  <Card title="Current (A)" icon="plug">
+    Electrical current measured in amperes. Baseline target: **12.0 A**
+  </Card>
+  
+  <Card title="Power Factor" icon="gauge">
+    Ratio of real power to apparent power (0.0 to 1.0). Baseline target: **0.92**
+  </Card>
+  
+  <Card title="Vibration (g)" icon="wave-square">
+    Vibration intensity measured in g-force. Baseline target: **0.15 g**
+  </Card>
+</CardGroup>
+
+## Health Score Ring
+
+The **Health Summary** card displays a circular progress ring showing the asset's overall health on a scale of **0-100**.
+
+### Color Coding
+
+Health scores are color-coded based on risk level:
+
+| Health Score | Risk Level | Color | Meaning |
+|--------------|------------|-------|----------|
+| **75-100** | LOW | <span style={{color: '#22c55e'}}>Green</span> | Asset is healthy, normal operation |
+| **50-74** | MODERATE | <span style={{color: '#f59e0b'}}>Yellow/Orange</span> | Minor degradation detected |
+| **25-49** | HIGH | <span style={{color: '#f97316'}}>Orange</span> | Significant anomalies, schedule maintenance |
+| **0-24** | CRITICAL | <span style={{color: '#ef4444'}}>Red</span> | Immediate maintenance required |
+
+<Info>
+Health scores are derived from the **Cumulative Degradation Index (DI)**, which increases monotonically as the system experiences anomalies. The formula is: `health_score = 100 × (1 - DI)`
+</Info>
+
+## Maintenance Window
+
+The dashboard displays an estimated maintenance window in **days** based on the current degradation rate:
+
+```
+RUL (hours) = (1.0 - DI) / max(damage_rate, 1e-9)
+maintenance_window_days = RUL / 24
+```
+
+**Example Display:**
+- **~60 days** — Asset is healthy, no urgency
+- **~19 days** — MODERATE risk, plan preventive maintenance
+- **~4 days** — HIGH risk, schedule maintenance soon
+- **< 1 day** — CRITICAL risk, immediate action required
+
+## Baseline Target Values
+
+After **calibration**, the system learns baseline target values from healthy sensor data. These targets are displayed on Status Cards as small gray text below the live reading:
+
+<Card title="Example: Voltage Status Card" icon="bolt">
+  <div style={{fontFamily: 'monospace'}}>
+    <div style={{fontSize: '24px'}}>230.2 V</div>
+    <div style={{fontSize: '12px', color: '#888'}}>Target: 230.0 V</div>
+  </div>
+</Card>
+
+### How Baselines Are Calculated
+
+During the **CALIBRATING** state (see [System Controls](/dashboard/controls)), the backend collects 100+ sensor readings and computes:
+
+```python
+baseline_targets = {
+    "voltage_v": round(mean(voltage_samples), 1),
+    "current_a": round(mean(current_samples), 1),
+    "power_factor": round(mean(power_factor_samples), 2),
+    "vibration_g": round(mean(vibration_samples), 3)
+}
+```
+
+These targets are returned in the `/api/health` response and displayed on Status Cards for quick visual comparison.
+
+## Streaming Chart Metrics
+
+The **Streaming Sensor Telemetry** chart plots three signals over a 60-second sliding window:
+
+<Tabs>
+  <Tab title="Voltage">
+    - **Color:** Blue (`#3b82f6`)
+    - **Y-Axis Range:** 220-240 V
+    - **Use Case:** Detect voltage spikes or brownouts
+  </Tab>
+  
+  <Tab title="Current">
+    - **Color:** Orange (`#f97316`)
+    - **Y-Axis Range:** 0-20 A
+    - **Use Case:** Identify sudden load changes or electrical faults
+  </Tab>
+  
+  <Tab title="Vibration">
+    - **Color:** Purple (`#a855f7`)
+    - **Y-Axis Range:** 0-0.5 g
+    - **Use Case:** Detect bearing wear, misalignment, or resonance
+  </Tab>
+</Tabs>
+
+### Anomaly Shading
+
+When the risk level is **not LOW**, red dashed vertical lines and shaded regions appear on the chart to highlight anomalous time periods.
+
+<Info>
+Anomaly markers use **majority-rules aggregation** (≥15/100 points) and **2-second debounce** to suppress noise and prevent flickering.
+</Info>
+
+## Health Score Calculation Details
+
+The health score is derived from two machine learning models:
+
+### Dual-Model Architecture
+
+| Model | Features | Sampling Rate | F1 Score | AUC-ROC |
+|-------|----------|---------------|----------|----------|
+| **Legacy (v2)** | 6 features | 1 Hz | 78.1% | 1.000 |
+| **Batch (v3)** | 16 features | 100 Hz | **99.6%** | **1.000** |
+
+The **Batch model** (v3) is the primary detector. It extracts 16 statistical features (mean, std, peak-to-peak, RMS) from 100-sample windows to detect subtle faults like **Jitter** (high variance with normal mean).
+
+### Dead-Zone for Healthy Noise
+
+To prevent healthy fluctuations from accumulating damage, the system uses a **dead-zone threshold**:
+
+```python
+HEALTHY_FLOOR = 0.65
+if batch_score < HEALTHY_FLOOR:
+    effective_severity = 0.0  # No damage accumulated
+else:
+    effective_severity = (batch_score - HEALTHY_FLOOR) / (1.0 - HEALTHY_FLOOR)
+```
+
+Only scores above 0.65 contribute to the Cumulative Degradation Index (DI).
+
+## Status Card Indicators
+
+Each Status Card changes color based on the sensor value and fault state:
+
+<CardGroup cols={2}>
+  <Card title="Green Border" icon="circle-check">
+    Value is within normal range and no fault detected
+  </Card>
+  
+  <Card title="Yellow Border" icon="triangle-exclamation">
+    Value deviates from baseline but not critical
+  </Card>
+  
+  <Card title="Red Border" icon="circle-xmark">
+    Fault detected or value is critically out of range
+  </Card>
+</CardGroup>
+
+### Status Logic Example (Vibration)
+
+```javascript
+function vibrationStatus(value) {
+    if (value == null) return 'gray';
+    if (value < 0.18) return 'green';  // Healthy
+    if (value < 0.25) return 'yellow'; // Warning
+    return 'red';                      // Critical
+}
+```
+
+If `is_faulty` flag is true, the status is **overridden to red** regardless of value.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="System Controls" icon="sliders" href="/dashboard/controls">
+    Learn how to calibrate the system and inject faults
+  </Card>
+  
+  <Card title="Operator Logs" icon="clipboard" href="/dashboard/operator-logs">
+    Log maintenance events to create ground-truth data
+  </Card>
+</CardGroup>
